@@ -8,7 +8,9 @@ import (
 )
 
 type Config struct {
-	Filters []FilterOptions
+	InboundDNSQueue uint16
+	IPv6            bool
+	Filters         []FilterOptions
 }
 
 type FilterOptions struct {

@@ -12,50 +12,85 @@ type TimedCache struct {
 	logger *zap.Logger
 
 	// TODO: make generic once 1.18 lands
-	records map[string]*time.Timer
+	cache map[string]*pair
+}
+
+type pair struct {
+	count int
+	timer *time.Timer
 }
 
 func NewTimedCache(logger *zap.Logger) *TimedCache {
 	var t TimedCache
 
 	t.logger = logger
-	t.records = make(map[string]*time.Timer)
+	t.cache = make(map[string]*pair)
 
 	return &t
 }
 
-func (t *TimedCache) AddRecord(record string, ttl uint32) {
+func (t *TimedCache) AddEntry(key string, count bool, ttl time.Duration) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
-	dur := time.Duration(ttl) * time.Second
-	timer, ok := t.records[record]
+	p, ok := t.cache[key]
 	if ok {
-		if !timer.Stop() {
-			<-timer.C
+		if count {
+			t.logger.Debug("incrementing count", zap.String("key", key))
+			p.count++
 		}
 
-		timer.Reset(dur)
-	} else {
-		timer := time.NewTimer(dur)
-		t.records[record] = timer
-
-		go func() {
-			<-timer.C
-			t.logger.Debug("deleting record", zap.String("record", record))
-
-			t.mtx.Lock()
-			delete(t.records, record)
-			t.mtx.Unlock()
-		}()
+		if !p.timer.Stop() {
+			<-p.timer.C
+		}
+		p.timer.Reset(ttl)
+		return
 	}
+
+	timer := time.NewTimer(ttl)
+	t.cache[key] = &pair{
+		count: 0,
+		timer: timer,
+	}
+
+	go func() {
+		<-timer.C
+		t.logger.Debug("deleting entry", zap.String("key", key))
+
+		t.mtx.Lock()
+		delete(t.cache, key)
+		t.mtx.Unlock()
+	}()
 }
 
-func (t *TimedCache) RecordExists(record string) bool {
+func (t *TimedCache) EntryExists(key string) bool {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 
-	_, ok := t.records[record]
+	_, ok := t.cache[key]
 
 	return ok
+}
+
+func (t *TimedCache) RemoveEntry(key string) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
+	p, ok := t.cache[key]
+	if !ok {
+		return
+	}
+
+	if p.count != 0 {
+		t.logger.Debug("decrementing count", zap.String("key", key))
+		p.count--
+		return
+	}
+	t.logger.Debug("deleting entry", zap.String("key", key))
+
+	if !p.timer.Stop() {
+		<-p.timer.C
+	}
+
+	delete(t.cache, key)
 }

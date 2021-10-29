@@ -32,20 +32,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	filters := make([]*filter, len(config.Filters))
-	for i, filterOpt := range config.Filters {
-		filter, err := startFilter(ctx, logger, &filterOpt)
-		if err != nil {
-			logger.Fatal("error starting filter", zap.String("error", err.Error()))
-		}
-
-		filters[i] = filter
+	filters, err := StartFilters(ctx, logger, config)
+	if err != nil {
+		logger.Fatal("error starting filters", zap.String("error", err.Error()))
 	}
+	logger.Info("started filtering")
 
 	<-ctx.Done()
 
 	logger.Info("stopping filters")
-	for i := range filters {
-		filters[i].close()
-	}
+	filters.Stop()
 }
