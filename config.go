@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/pelletier/go-toml/v2"
@@ -21,22 +22,33 @@ type FilterOptions struct {
 }
 
 func ParseConfig(confPath string) (*Config, error) {
-	f, err := os.Open(confPath)
+	data, err := os.ReadFile(confPath)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	d := toml.NewDecoder(f)
-	d.SetStrict(true)
 
 	var config Config
-	if err := d.Decode(&config); err != nil {
-		var sme *toml.StrictMissingError
-		if errors.As(err, &sme) {
-			return nil, errors.New(sme.String())
-		}
+	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, err
+	}
+
+	if len(config.Filters) == 0 {
+		return nil, errors.New("at least one filter must be specified")
+	}
+	if config.InboundDNSQueue == 0 {
+		return nil, errors.New(`"inboundDNSQueue" must be set`)
+	}
+
+	for i, filterOpt := range config.Filters {
+		if filterOpt.DNSQueue == 0 {
+			return nil, fmt.Errorf(`filter #%d: "dnsQueue" must be set`, i)
+		}
+		if filterOpt.TrafficQueue == 0 {
+			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must be set`, i)
+		}
+		if len(filterOpt.Hostnames) == 0 {
+			return nil, fmt.Errorf(`filter #%d: at least one hostname must be specified`, i)
+		}
 	}
 
 	return &config, nil
