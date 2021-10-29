@@ -54,8 +54,8 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		filters:  make([]*filter, len(config.Filters)),
 	}
 
-	for i, filterOpt := range config.Filters {
-		filter, err := startFilter(ctx, logger, &filterOpt)
+	for i := range config.Filters {
+		filter, err := startFilter(ctx, logger, &config.Filters[i])
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +341,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			}
 		}
 		if connFilter == nil {
-			logger.Warn("dropping DNS request from unknown connection")
+			logger.Warn("dropping DNS response from unknown connection")
 
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
