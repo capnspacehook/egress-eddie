@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/florianl/go-nfqueue v1.3.0
 	github.com/google/gopacket v1.1.19
+	github.com/pelletier/go-toml/v2 v2.0.0-beta.3
 	go.uber.org/zap v1.19.1
 	golang.org/x/sys v0.0.0-20210820121016-41cdb8703e55
 )
