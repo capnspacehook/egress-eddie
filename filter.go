@@ -372,6 +372,12 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 					logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Uint32("answer.ttl", answer.TTL))
 
 					connFilter.allowedIPs.AddEntry(ipStr, false, time.Duration(answer.TTL)*time.Second)
+				} else if answer.Type == layers.DNSTypeCNAME {
+					// temporarily add CNAME answers to allowed
+					// hostnames list
+					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Uint32("answer.ttl", answer.TTL))
+
+					connFilter.additionalHostnames.AddEntry(string(answer.CNAME), false, time.Duration(answer.TTL)*time.Second)
 				} else if answer.Type == layers.DNSTypeSRV {
 					// temporarily add SRV answers to allowed
 					// hostnames list
