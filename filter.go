@@ -105,7 +105,7 @@ func (f *filter) newDNSCallback() nfqueue.HookFunc {
 
 		// validate connection state
 		if *attr.CtInfo != state_new && *attr.CtInfo != state_established {
-			logger.Warn("dropping packer with unknown connection state")
+			logger.Warn("dropping DNS packet with unknown connection state")
 
 			if err := f.dnsNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
@@ -140,19 +140,7 @@ func (f *filter) newDNSCallback() nfqueue.HookFunc {
 		if *attr.CtInfo == state_new {
 			// validate DNS request questions are for allowed
 			// hostnames, drop them otherwise
-			if dns.QDCount > 0 {
-				if !f.validateDNSQuestions(logger, &dns) {
-					if err := f.dnsNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-						logger.Error("error setting verdict", zap.String("error", err.Error()))
-					}
-					return 0
-				}
-			} else {
-				// drop DNS requests with no questions; this probably
-				// doesn't happen in practice but doesn't hurt to
-				// handle this case
-				logger.Info("dropping dns request with no questions")
-
+			if !f.validateDNSQuestions(logger, &dns) {
 				if err := f.dnsNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.String("error", err.Error()))
 				}
@@ -166,21 +154,36 @@ func (f *filter) newDNSCallback() nfqueue.HookFunc {
 			logger.Info("allowing DNS request", zap.Strings("questions", questions))
 		}
 
-		// if this is a packet from an established connection, assume
-		// this is a DNS request
+		// since DNS requests are filtered above, we only process
+		// DNS responses of established packets to make sure a
+		// local attacker can't connect to disallowed IPs by
+		// sending a DNS response with an attacker specified IP
+		// as an answer, thereby allowing that IP
 		if *attr.CtInfo == state_established {
-			// since DNS requests are filtered above, we only process
-			// DNS responses of established packets to make sure a
-			// local attacker can't connect to disallowed IPs by
-			// sending a DNS response with an attacker specified IP
+			// validate DNS response questions are for allowed
+			// hostnames, drop them otherwise; responses for disallowed
+			// hostnames should never happen in theory, because we
+			// block requests for disallowed hostnames but it doesn't
+			// hurt to check
+			if !f.validateDNSQuestions(logger, &dns) {
+				if err := f.dnsNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+					logger.Error("error setting verdict", zap.String("error", err.Error()))
+				}
+				return 0
+			}
+
 			if dns.ANCount > 0 {
 				for _, answer := range dns.Answers {
 					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
+						// temporarily add A and AAAA answers to
+						// allowed IP list
 						ipStr := answer.IP.String()
 						logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Uint32("answer.ttl", answer.TTL))
 
 						f.allowedIPs.AddRecord(ipStr, answer.TTL)
 					} else if answer.Type == layers.DNSTypeSRV {
+						// temporarily add SRV answers to allowed
+						// hostnames list
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Uint32("answer.ttl", answer.TTL))
 
 						f.additionalHostnames.AddRecord(string(answer.SRV.Name), answer.TTL)
@@ -198,6 +201,14 @@ func (f *filter) newDNSCallback() nfqueue.HookFunc {
 }
 
 func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool {
+	if dns.QDCount == 0 {
+		// drop DNS requests with no questions; this probably
+		// doesn't happen in practice but doesn't hurt to
+		// handle this case
+		logger.Info("dropping dns request with no questions")
+		return false
+	}
+
 	var allowed bool
 	for i := range dns.Questions {
 		allowed = false
