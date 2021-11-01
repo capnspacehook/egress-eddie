@@ -4,8 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
-	"github.com/pelletier/go-toml/v2"
+	"github.com/pelletier/go-toml"
 )
 
 type Config struct {
@@ -15,9 +16,10 @@ type Config struct {
 }
 
 type FilterOptions struct {
-	DNSQueue     uint16
+	DNSQueue     uint16 `toml:"dnsQueue"`
 	TrafficQueue uint16
 	IPv6         bool
+	AllowIPsFor  time.Duration
 	Hostnames    []string
 }
 

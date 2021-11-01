@@ -84,9 +84,9 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (
 	f := filter{
 		opts:                opts,
 		logger:              logger,
-		connections:         NewTimedCache(logger),
-		allowedIPs:          NewTimedCache(logger),
-		additionalHostnames: NewTimedCache(logger),
+		connections:         NewTimedCache(logger, true),
+		allowedIPs:          NewTimedCache(logger, false),
+		additionalHostnames: NewTimedCache(logger, false),
 	}
 
 	dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
@@ -167,6 +167,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			logger.Error("error parsing DNS packet", zap.String("error", err.Error()))
 			return 0
 		}
+		logger := logger.With(zap.String("conn.id", connID))
 
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
@@ -189,8 +190,8 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		logger.Info("allowing DNS request", zap.Strings("questions", questions))
 
 		// give DNS connections a minute to finish max
-		logger.Debug("adding connection", zap.String("conn_id", connID))
-		f.connections.AddEntry(connID, true, time.Minute)
+		logger.Debug("adding connection")
+		f.connections.AddEntry(connID, time.Minute)
 
 		return 0
 	}
@@ -244,7 +245,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, err
 	}
 
 	connIDBuilder.WriteRune(rune(decoded[1]))
-	connIDBuilder.WriteByte('-')
+	connIDBuilder.WriteByte('|')
 	if inbound {
 		connIDBuilder.WriteString(dstIP)
 		connIDBuilder.WriteByte(':')
@@ -332,6 +333,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			logger.Error("error parsing DNS packet", zap.String("error", err.Error()))
 			return 0
 		}
+		logger := logger.With(zap.String("conn.id", connID))
 
 		// TODO: optimize
 		var connFilter *filter
@@ -348,7 +350,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			}
 			return 0
 		}
-		logger.Debug("removing connection", zap.String("conn_id", connID))
+		logger.Debug("removing connection")
 		connFilter.connections.RemoveEntry(connID)
 
 		// validate DNS response questions are for allowed
@@ -369,21 +371,24 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 					// temporarily add A and AAAA answers to
 					// allowed IP list
 					ipStr := answer.IP.String()
-					logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Uint32("answer.ttl", answer.TTL))
+					ttl := connFilter.getTTL(answer.TTL)
+					logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Duration("answer.ttl", ttl))
 
-					connFilter.allowedIPs.AddEntry(ipStr, false, time.Duration(answer.TTL)*time.Second)
+					connFilter.allowedIPs.AddEntry(ipStr, ttl)
 				} else if answer.Type == layers.DNSTypeCNAME {
 					// temporarily add CNAME answers to allowed
 					// hostnames list
-					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Uint32("answer.ttl", answer.TTL))
+					ttl := connFilter.getTTL(answer.TTL)
+					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
 
-					connFilter.additionalHostnames.AddEntry(string(answer.CNAME), false, time.Duration(answer.TTL)*time.Second)
+					connFilter.additionalHostnames.AddEntry(string(answer.CNAME), connFilter.getTTL(answer.TTL))
 				} else if answer.Type == layers.DNSTypeSRV {
 					// temporarily add SRV answers to allowed
 					// hostnames list
-					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Uint32("answer.ttl", answer.TTL))
+					ttl := connFilter.getTTL(answer.TTL)
+					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
 
-					connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), false, time.Duration(answer.TTL)*time.Second)
+					connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), connFilter.getTTL(answer.TTL))
 				}
 			}
 		}
@@ -395,6 +400,14 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 
 		return 0
 	}
+}
+
+func (f *filter) getTTL(ttl uint32) time.Duration {
+	if f.opts.AllowIPsFor != 0 {
+		return f.opts.AllowIPsFor
+	}
+
+	return time.Duration(ttl) * time.Second
 }
 
 func newGenericCallback(f *filter) nfqueue.HookFunc {
@@ -445,12 +458,12 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 
 		// validate that either the source or destination IP is allowed
 		var verdict int
-		if !f.validateIPs(src, dst) {
-			logger.Info("dropping packet", zap.String("src_ip", src), zap.String("dst_ip", dst))
-			verdict = nfqueue.NfDrop
-		} else {
-			logger.Info("allowing packet", zap.String("src_ip", src), zap.String("dst_ip", dst))
+		if f.validateIPs(src, dst) {
+			logger.Info("allowing packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
 			verdict = nfqueue.NfAccept
+		} else {
+			logger.Info("dropping packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+			verdict = nfqueue.NfDrop
 		}
 
 		if err := f.genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
@@ -462,14 +475,14 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 }
 
 func (f *filter) validateIPs(src, dst string) bool {
-	allowed := f.allowedIPs.EntryExists(src)
-
-	// only check the destination IP if the source is not allowed
-	if !allowed {
-		allowed = f.allowedIPs.EntryExists(dst)
+	// check if the destination IP is allowed first, as most likely
+	// we are validating an outbound connection
+	allowed := f.allowedIPs.EntryExists(dst)
+	if allowed {
+		return true
 	}
 
-	return allowed
+	return f.allowedIPs.EntryExists(src)
 }
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {

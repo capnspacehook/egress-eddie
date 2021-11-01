@@ -13,6 +13,7 @@ type TimedCache struct {
 
 	// TODO: make generic once 1.18 lands
 	cache map[string]*pair
+	count bool
 }
 
 type pair struct {
@@ -20,22 +21,23 @@ type pair struct {
 	timer *time.Timer
 }
 
-func NewTimedCache(logger *zap.Logger) *TimedCache {
+func NewTimedCache(logger *zap.Logger, count bool) *TimedCache {
 	var t TimedCache
 
 	t.logger = logger
 	t.cache = make(map[string]*pair)
+	t.count = count
 
 	return &t
 }
 
-func (t *TimedCache) AddEntry(key string, count bool, ttl time.Duration) {
+func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
 	p, ok := t.cache[key]
 	if ok {
-		if count {
+		if t.count {
 			t.logger.Debug("incrementing count", zap.String("key", key))
 			p.count++
 		}
