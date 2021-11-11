@@ -164,7 +164,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 
 		dns, connID, err := parseDNSPacket(*attr.Payload, f.opts.IPv6, false)
 		if err != nil {
-			logger.Error("error parsing DNS packet", zap.String("error", err.Error()))
+			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
 		}
 		logger := logger.With(zap.String("conn.id", connID))
@@ -173,13 +173,13 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		// hostnames, drop them otherwise
 		if !f.validateDNSQuestions(logger, dns) {
 			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
+				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
 		if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
-			logger.Error("error setting verdict", zap.String("error", err.Error()))
+			logger.Error("error setting verdict", zap.NamedError("error", err))
 			return 0
 		}
 
@@ -323,14 +323,14 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			logger.Warn("dropping DNS response with that is not from an established connection")
 
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
+				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
 		dns, connID, err := parseDNSPacket(*attr.Payload, f.ipv6, true)
 		if err != nil {
-			logger.Error("error parsing DNS packet", zap.String("error", err.Error()))
+			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
 		}
 		logger := logger.With(zap.String("conn.id", connID))
@@ -346,7 +346,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			logger.Warn("dropping DNS response from unknown connection")
 
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
+				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
@@ -360,7 +360,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		// hurt to check
 		if !connFilter.validateDNSQuestions(logger, dns) {
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
+				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
@@ -394,7 +394,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		}
 
 		if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
-			logger.Error("error setting verdict", zap.String("error", err.Error()))
+			logger.Error("error setting verdict", zap.NamedError("error", err))
 			return 0
 		}
 
@@ -442,7 +442,7 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 		}
 
 		if err := parser.DecodeLayers(*attr.Payload, &decoded); err != nil {
-			logger.Error("error parsing packet", zap.String("error", err.Error()))
+			logger.Error("error parsing packet", zap.NamedError("error", err))
 			return 0
 		}
 
@@ -467,7 +467,7 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 		}
 
 		if err := f.genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
-			logger.Error("error setting verdict", zap.String("error", err.Error()))
+			logger.Error("error setting verdict", zap.NamedError("error", err))
 		}
 
 		return 0
@@ -487,7 +487,7 @@ func (f *filter) validateIPs(src, dst string) bool {
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {
 	return func(err error) int {
-		logger.Error("netlink error", zap.String("error", err.Error()))
+		logger.Error("netlink error", zap.NamedError("error", err))
 
 		return 0
 	}
