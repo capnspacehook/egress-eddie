@@ -152,16 +152,6 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			return 0
 		}
 
-		// verify that a DNS request is from a new connection
-		if *attr.CtInfo != state_new {
-			logger.Warn("dropping DNS request with that is not from a new connection")
-
-			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
-			}
-			return 0
-		}
-
 		dns, connID, err := parseDNSPacket(*attr.Payload, f.opts.IPv6, false)
 		if err != nil {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
