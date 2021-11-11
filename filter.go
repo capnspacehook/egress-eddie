@@ -168,20 +168,18 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			return 0
 		}
 
-		if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
-			logger.Error("error setting verdict", zap.NamedError("error", err))
-			return 0
-		}
-
-		questions := make([]string, len(dns.Questions))
-		for i := range dns.Questions {
-			questions[i] = string(dns.Questions[i].Name) + ": " + dns.Questions[i].Type.String()
-		}
-		logger.Info("allowing DNS request", zap.Strings("questions", questions))
+		logger.Info("allowing DNS request", zap.Strings("questions", questionStrings(dns.Questions)))
 
 		// give DNS connections a minute to finish max
 		logger.Debug("adding connection")
 		f.connections.AddEntry(connID, time.Minute)
+
+		if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
+			logger.Error("error setting verdict", zap.NamedError("error", err))
+			logger.Debug("removing connection")
+			f.connections.RemoveEntry(connID)
+			return 0
+		}
 
 		return 0
 	}
@@ -290,6 +288,15 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 	return true
 }
 
+func questionStrings(dnsQs []layers.DNSQuestion) []string {
+	questions := make([]string, len(dnsQs))
+	for i := range dnsQs {
+		questions[i] = string(dnsQs[i].Name) + ": " + dnsQs[i].Type.String()
+	}
+
+	return questions
+}
+
 func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 	logger := f.logger.With(zap.Uint16("queue.num", f.queueNum))
 
@@ -333,7 +340,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			}
 		}
 		if connFilter == nil {
-			logger.Warn("dropping DNS response from unknown connection")
+			logger.Warn("dropping DNS response from unknown connection", zap.Strings("questions", questionStrings(dns.Questions)))
 
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
