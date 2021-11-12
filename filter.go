@@ -11,6 +11,7 @@ import (
 	"github.com/florianl/go-nfqueue"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/mdlayher/netlink"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
@@ -484,6 +485,15 @@ func (f *filter) validateIPs(src, dst string) bool {
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {
 	return func(err error) int {
+		// skip noisy errors that aren't important when exiting
+		var nerr *netlink.OpError
+		if errors.As(err, &nerr) {
+			if strings.Contains(err.Error(), "i/o timeout") ||
+				strings.Contains(err.Error(), "use of closed file") {
+				return 0
+			}
+		}
+
 		logger.Error("netlink error", zap.NamedError("error", err))
 
 		return 0
