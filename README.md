@@ -41,6 +41,14 @@ setcap 'cap_net_admin=+ep' egress-eddie
 
 Special permissions are needed to interface with nfqueue.
 
+## Installing
+
+Either download the latest release or build the code yourself:
+
+```bash
+go install github.com/capnspacehook/egress-eddie@latest
+```
+
 # Configuration
 
 Egress Eddie requires both iptables rules that send appropriate packets to Egress Eddie for
