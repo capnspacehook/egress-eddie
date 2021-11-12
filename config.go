@@ -16,11 +16,11 @@ type Config struct {
 }
 
 type FilterOptions struct {
-	DNSQueue     uint16 `toml:"dnsQueue"`
-	TrafficQueue uint16
-	IPv6         bool
-	AllowIPsFor  time.Duration
-	Hostnames    []string
+	DNSQueue        uint16 `toml:"dnsQueue"`
+	TrafficQueue    uint16
+	IPv6            bool
+	AllowAnswersFor time.Duration
+	Hostnames       []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {

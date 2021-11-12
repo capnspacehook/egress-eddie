@@ -400,8 +400,8 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 }
 
 func (f *filter) getTTL(ttl uint32) time.Duration {
-	if f.opts.AllowIPsFor != 0 {
-		return f.opts.AllowIPsFor
+	if f.opts.AllowAnswersFor != 0 {
+		return f.opts.AllowAnswersFor
 	}
 
 	return time.Duration(ttl) * time.Second
