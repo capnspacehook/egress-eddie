@@ -8,6 +8,7 @@ import (
 	"os/signal"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -30,6 +31,8 @@ func main() {
 	if debug {
 		logCfg.Level.SetLevel(zap.DebugLevel)
 	}
+	logCfg.EncoderConfig.TimeKey = "time"
+	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
 	logCfg.DisableCaller = true
 
 	logger, err := logCfg.Build()
