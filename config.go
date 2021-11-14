@@ -16,11 +16,12 @@ type Config struct {
 }
 
 type FilterOptions struct {
-	DNSQueue        uint16 `toml:"dnsQueue"`
-	TrafficQueue    uint16
-	IPv6            bool
-	AllowAnswersFor time.Duration
-	Hostnames       []string
+	DNSQueue          uint16 `toml:"dnsQueue"`
+	TrafficQueue      uint16
+	IPv6              bool
+	AllowAllHostnames bool
+	AllowAnswersFor   time.Duration
+	Hostnames         []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -45,11 +46,17 @@ func ParseConfig(confPath string) (*Config, error) {
 		if filterOpt.DNSQueue == 0 {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" must be set`, i)
 		}
-		if filterOpt.TrafficQueue == 0 {
+		if !filterOpt.AllowAllHostnames && filterOpt.TrafficQueue == 0 {
 			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must be set`, i)
 		}
-		if len(filterOpt.Hostnames) == 0 {
+		if filterOpt.AllowAllHostnames && filterOpt.TrafficQueue > 0 {
+			return nil, fmt.Errorf(`filter #%d: "trafficQueue" should not be set when "allowAllHostnames" is true`, i)
+		}
+		if !filterOpt.AllowAllHostnames && len(filterOpt.Hostnames) == 0 {
 			return nil, fmt.Errorf(`filter #%d: at least one hostname must be specified`, i)
+		}
+		if filterOpt.AllowAllHostnames && len(filterOpt.Hostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: no hostnames should be specified when "allowAllHostnames" is true`, i)
 		}
 	}
 

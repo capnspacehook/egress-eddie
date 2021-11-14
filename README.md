@@ -152,10 +152,22 @@ not set, it defaults to the TTL of the DNS response.
 
 Finally `hostnames` controls the hostnames that are allowed, which here is just `github.com`.
 
+### Allowing all hostnames
+
+There may be situations where you want to filter the hostnames of a specific user or type
+of traffic, but allow other users or types of traffic flow unrestricted. I like to allow
+the root user to have unrestricted HTTP/S access for example, as if someone compromises the
+root account, then all other bets are off.
+
+To accomplish this, set `allowAllHostnames = true` and don't set either `trafficQueue` or
+`hostnames`. Because all DNS responses must be inspected by Egress Eddie in order for it to
+function properly, all DNS requests must go through Egress Eddie as well.
+
 ## Example
 
 Here's an example that ties everything mentioned above together. It allows `apt` to access
-the standard Debian repositories, and the `dev` user to pull Go modules.
+the standard Debian repositories, the `dev` user to pull Go modules, and the `root` user
+to have unrestricted DNS traffic.
 
 iptables rules:
 
@@ -174,6 +186,9 @@ iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner dev -j NFQUEUE --queue
 # filter HTTP/S requests from the dev user
 iptables -A OUTPUT -p tcp --dport 80 -m owner --uid-owner dev -m state --state NEW -j NFQUEUE --queue-num 2001
 iptables -A OUTPUT -p tcp --dport 443 -m owner --uid-owner dev -m state --state NEW -j NFQUEUE --queue-num 2001
+
+# allow all DNS requests from the root user
+iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queue-num 3000
 ```
 
 config file:
@@ -201,4 +216,10 @@ hostnames = [
     "proxy.golang.org",
     "sum.golang.org",
 ]
+
+# allow all root DNS requests
+[[filters]]
+dnsQueue = 3000
+ipv6 = false
+allowAllHostnames = true
 ```

@@ -83,11 +83,20 @@ func (f *FilterManager) Stop() {
 
 func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (*filter, error) {
 	f := filter{
-		opts:                opts,
-		logger:              logger,
-		connections:         NewTimedCache(logger, true),
-		allowedIPs:          NewTimedCache(logger, false),
-		additionalHostnames: NewTimedCache(logger, false),
+		opts:        opts,
+		logger:      logger,
+		connections: NewTimedCache(logger, true),
+	}
+
+	if !opts.AllowAllHostnames {
+		f.allowedIPs = NewTimedCache(logger, false)
+		f.additionalHostnames = NewTimedCache(logger, false)
+
+		genericNF, err := startNfQueue(ctx, logger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
+		if err != nil {
+			return nil, fmt.Errorf("error opening nfqueue: %v", err)
+		}
+		f.genericNF = genericNF
 	}
 
 	dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
@@ -95,12 +104,6 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (
 		return nil, fmt.Errorf("error opening nfqueue: %v", err)
 	}
 	f.dnsReqNF = dnsNF
-
-	genericNF, err := startNfQueue(ctx, logger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
-	if err != nil {
-		return nil, fmt.Errorf("error opening nfqueue: %v", err)
-	}
-	f.genericNF = genericNF
 
 	return &f, nil
 }
@@ -136,7 +139,9 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 
 func (f *filter) close() {
 	f.dnsReqNF.Close()
-	f.genericNF.Close()
+	if f.genericNF != nil {
+		f.genericNF.Close()
+	}
 }
 
 func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
@@ -162,7 +167,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
-		if !f.validateDNSQuestions(logger, dns) {
+		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(logger, dns) {
 			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
@@ -213,6 +218,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, err
 
 	var (
 		connIDBuilder    strings.Builder
+		connType         string
 		srcIP, dstIP     string
 		srcPort, dstPort string
 	)
@@ -226,14 +232,16 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, err
 		dstIP = ip6.DstIP.String()
 	}
 	if decoded[1] == layers.LayerTypeUDP {
+		connType = "udp"
 		srcPort = strconv.Itoa(int(udp.SrcPort))
 		dstPort = strconv.Itoa(int(udp.DstPort))
 	} else {
+		connType = "tcp"
 		srcPort = strconv.Itoa(int(tcp.SrcPort))
 		dstPort = strconv.Itoa(int(tcp.DstPort))
 	}
 
-	connIDBuilder.WriteRune(rune(decoded[1]))
+	connIDBuilder.WriteString(connType)
 	connIDBuilder.WriteByte('|')
 	if inbound {
 		connIDBuilder.WriteString(dstIP)
@@ -356,14 +364,14 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		// hostnames should never happen in theory, because we
 		// block requests for disallowed hostnames but it doesn't
 		// hurt to check
-		if !connFilter.validateDNSQuestions(logger, dns) {
+		if !connFilter.opts.AllowAllHostnames && !connFilter.validateDNSQuestions(logger, dns) {
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
-		if dns.ANCount > 0 {
+		if !connFilter.opts.AllowAllHostnames && dns.ANCount > 0 {
 			for _, answer := range dns.Answers {
 				if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
 					// temporarily add A and AAAA answers to
