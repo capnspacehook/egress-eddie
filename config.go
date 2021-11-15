@@ -20,6 +20,7 @@ type FilterOptions struct {
 	TrafficQueue      uint16
 	IPv6              bool
 	AllowAllHostnames bool
+	LookupUnknownIPs  bool `toml:"lookupUnknownIPs"`
 	AllowAnswersFor   time.Duration
 	Hostnames         []string
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +18,11 @@ import (
 )
 
 const (
-	state_new         = 2
 	state_established = 3
+
+	// used when allowing IPs after a reverse lookup and if
+	// 'allowAnswersFor' isn't set
+	default_ttl = 60
 )
 
 type FilterManager struct {
@@ -273,28 +277,27 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 		return false
 	}
 
-	var allowed bool
 	for i := range dns.Questions {
-		allowed = false
-		for j := range f.opts.Hostnames {
-			// check if the question has an allowed hostname as a
-			// suffix to allow access to subdomains
-			qName := string(dns.Questions[i].Name)
-			if strings.HasSuffix(qName, f.opts.Hostnames[j]) || f.additionalHostnames.EntryExists(qName) {
-				allowed = true
-				break
-			}
-		}
-
 		// bail out if any of the questions don't contain an allowed
 		// hostname
-		if !allowed {
+		qName := string(dns.Questions[i].Name)
+		if !f.hostnameAllowed(qName) {
 			logger.Info("dropping DNS request", zap.ByteString("question", dns.Questions[i].Name))
 			return false
 		}
 	}
 
 	return true
+}
+
+func (f *filter) hostnameAllowed(hostname string) bool {
+	for j := range f.opts.Hostnames {
+		if strings.HasSuffix(hostname, f.opts.Hostnames[j]) {
+			return true
+		}
+	}
+
+	return f.additionalHostnames.EntryExists(hostname)
 }
 
 func questionStrings(dnsQs []layers.DNSQuestion) []string {
@@ -453,23 +456,37 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 		}
 
 		// get source and destination IP
-		var src, dst string
+		var (
+			src, dst     string
+			srcIP, dstIP net.IP
+		)
+
 		if decoded[0] == layers.LayerTypeIPv4 {
 			src = ip4.SrcIP.String()
+			srcIP = ip4.SrcIP
 			dst = ip4.DstIP.String()
+			dstIP = ip4.DstIP
 		} else if decoded[0] == layers.LayerTypeIPv6 {
 			src = ip6.SrcIP.String()
+			srcIP = ip6.SrcIP
 			dst = ip6.DstIP.String()
+			dstIP = ip6.DstIP
 		}
 
 		// validate that either the source or destination IP is allowed
 		var verdict int
-		if f.validateIPs(src, dst) {
-			logger.Info("allowing packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
-			verdict = nfqueue.NfAccept
-		} else {
-			logger.Info("dropping packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+		allowed, err := f.validateIPs(logger, src, dst, srcIP, dstIP)
+		if err != nil {
+			logger.Error("error validating IPs", zap.String("conn.src", src), zap.String("conn.dst", dst), zap.NamedError("error", err))
 			verdict = nfqueue.NfDrop
+		} else {
+			if allowed {
+				logger.Info("allowing packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+				verdict = nfqueue.NfAccept
+			} else {
+				logger.Info("dropping packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+				verdict = nfqueue.NfDrop
+			}
 		}
 
 		if err := f.genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
@@ -480,15 +497,65 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 	}
 }
 
-func (f *filter) validateIPs(src, dst string) bool {
+func (f *filter) validateIPs(logger *zap.Logger, src, dst string, srcIP, dstIP net.IP) (bool, error) {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
-	allowed := f.allowedIPs.EntryExists(dst)
-	if allowed {
-		return true
+	if f.allowedIPs.EntryExists(dst) {
+		return true, nil
 	}
 
-	return f.allowedIPs.EntryExists(src)
+	// check if source IP is allowed; if reverse IP lookups are
+	// disabled or the IP is allowed return early
+	allowed := f.allowedIPs.EntryExists(src)
+	if !f.opts.LookupUnknownIPs || allowed {
+		return allowed, nil
+	}
+
+	// preform reverse IP lookups on the destination and then source
+	// IPs only if the IPs are not private
+	if !dstIP.IsPrivate() {
+		allowed, err := f.lookupAndValidateIP(logger, dst)
+		if err != nil {
+			return false, err
+		}
+		if allowed {
+			return true, nil
+		}
+	}
+
+	if !srcIP.IsPrivate() {
+		return f.lookupAndValidateIP(logger, src)
+	}
+
+	return false, nil
+}
+
+func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip string) (bool, error) {
+	logger.Info("preforming reverse IP lookup", zap.String("ip", ip))
+	names, err := net.LookupAddr(ip)
+	if err != nil {
+		// don't return error if IP simply couldn't be found
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+
+	for i := range names {
+		if names[i][len(names[i])-1] == '.' {
+			names[i] = names[i][:len(names[i])-1]
+		}
+
+		if f.hostnameAllowed(names[i]) {
+			ttl := f.getTTL(default_ttl)
+			logger.Info("allowing IP after reverse lookup", zap.String("ip", ip), zap.Duration("ttl", ttl))
+			f.allowedIPs.AddEntry(ip, ttl)
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {
