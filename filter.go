@@ -292,7 +292,7 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 
 func (f *filter) hostnameAllowed(hostname string) bool {
 	for j := range f.opts.Hostnames {
-		if strings.HasSuffix(hostname, f.opts.Hostnames[j]) {
+		if hostname == f.opts.Hostnames[j] || strings.HasSuffix(hostname, "."+f.opts.Hostnames[j]) {
 			return true
 		}
 	}
