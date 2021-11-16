@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	InboundDNSQueue uint16
+	SelfDNSQueue    uint16
 	IPv6            bool
 	Filters         []FilterOptions
 }
@@ -20,7 +21,7 @@ type FilterOptions struct {
 	TrafficQueue      uint16
 	IPv6              bool
 	AllowAllHostnames bool
-	LookupUnknownIPs  bool `toml:"lookupUnknownIPs"`
+	LookupUnknownIPs  bool
 	AllowAnswersFor   time.Duration
 	Hostnames         []string
 }
@@ -43,6 +44,7 @@ func ParseConfig(confPath string) (*Config, error) {
 		return nil, errors.New(`"inboundDNSQueue" must be set`)
 	}
 
+	var preformReverseLookups bool
 	for i, filterOpt := range config.Filters {
 		if filterOpt.DNSQueue == 0 {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" must be set`, i)
@@ -59,6 +61,29 @@ func ParseConfig(confPath string) (*Config, error) {
 		if filterOpt.AllowAllHostnames && len(filterOpt.Hostnames) > 0 {
 			return nil, fmt.Errorf(`filter #%d: no hostnames should be specified when "allowAllHostnames" is true`, i)
 		}
+
+		if filterOpt.LookupUnknownIPs {
+			preformReverseLookups = true
+		}
+	}
+
+	if config.SelfDNSQueue > 0 && !preformReverseLookups {
+		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter sets "lookupUnknownIPs" to true`)
+	}
+
+	// if 'selfDNSQueue' is specified, create a filter that will allow
+	// Egress Eddie to only make reverse IP lookups
+	if config.SelfDNSQueue > 0 {
+		selfFilter := FilterOptions{
+			DNSQueue: config.SelfDNSQueue,
+			IPv6:     config.IPv6,
+			Hostnames: []string{
+				"in-addr.arpa",
+				"ip6.arpa",
+			},
+		}
+
+		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)
 	}
 
 	return &config, nil

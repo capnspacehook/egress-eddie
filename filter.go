@@ -59,6 +59,12 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		filters:  make([]*filter, len(config.Filters)),
 	}
 
+	nf, err := startNfQueue(ctx, logger, config.InboundDNSQueue, config.IPv6, newDNSResponseCallback(&f))
+	if err != nil {
+		return nil, err
+	}
+	f.dnsRespNF = nf
+
 	for i := range config.Filters {
 		filter, err := startFilter(ctx, logger, &config.Filters[i])
 		if err != nil {
@@ -67,12 +73,6 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 
 		f.filters[i] = filter
 	}
-
-	nf, err := startNfQueue(ctx, logger, config.InboundDNSQueue, config.IPv6, newDNSResponseCallback(&f))
-	if err != nil {
-		return nil, err
-	}
-	f.dnsRespNF = nf
 
 	return &f, nil
 }
@@ -92,7 +92,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (
 		connections: NewTimedCache(logger, true),
 	}
 
-	if !opts.AllowAllHostnames {
+	if opts.TrafficQueue != 0 {
 		f.allowedIPs = NewTimedCache(logger, false)
 		f.additionalHostnames = NewTimedCache(logger, false)
 
