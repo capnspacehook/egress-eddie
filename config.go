@@ -23,7 +23,9 @@ type FilterOptions struct {
 	AllowAllHostnames bool
 	LookupUnknownIPs  bool
 	AllowAnswersFor   time.Duration
-	Hostnames         []string
+	ReCacheEvery      time.Duration
+	AllowedHostnames  []string
+	CacheHostnames    []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -44,7 +46,10 @@ func ParseConfig(confPath string) (*Config, error) {
 		return nil, errors.New(`"inboundDNSQueue" must be set`)
 	}
 
-	var preformReverseLookups bool
+	var (
+		preformReverseLookups bool
+		allCacheHostnames     []string
+	)
 	for i, filterOpt := range config.Filters {
 		if filterOpt.DNSQueue == 0 {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" must be set`, i)
@@ -55,32 +60,50 @@ func ParseConfig(confPath string) (*Config, error) {
 		if filterOpt.AllowAllHostnames && filterOpt.TrafficQueue > 0 {
 			return nil, fmt.Errorf(`filter #%d: "trafficQueue" should not be set when "allowAllHostnames" is true`, i)
 		}
-		if !filterOpt.AllowAllHostnames && len(filterOpt.Hostnames) == 0 {
-			return nil, fmt.Errorf(`filter #%d: at least one hostname must be specified`, i)
+		if !filterOpt.AllowAllHostnames && len(filterOpt.CacheHostnames) == 0 && len(filterOpt.AllowedHostnames) == 0 {
+			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be non-empty`, i)
 		}
-		if filterOpt.AllowAllHostnames && len(filterOpt.Hostnames) > 0 {
-			return nil, fmt.Errorf(`filter #%d: no hostnames should be specified when "allowAllHostnames" is true`, i)
+		if filterOpt.AllowAllHostnames && len(filterOpt.AllowedHostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be empty when "allowAllHostnames" is true`, i)
+		}
+		if filterOpt.AllowAllHostnames && len(filterOpt.CacheHostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: "cacheHostnames" must be empty when "allowAllHostnames" is true`, i)
+		}
+		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CacheHostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must be set when "cacheHostnames" is non-empty`, i)
+		}
+		if filterOpt.ReCacheEvery > 0 && len(filterOpt.CacheHostnames) == 0 {
+			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must not be set when "cacheHostnames" is empty`, i)
 		}
 
 		if filterOpt.LookupUnknownIPs {
 			preformReverseLookups = true
 		}
+		if len(filterOpt.CacheHostnames) > 0 {
+			allCacheHostnames = append(allCacheHostnames, filterOpt.CacheHostnames...)
+		}
 	}
 
-	if config.SelfDNSQueue > 0 && !preformReverseLookups {
-		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter sets "lookupUnknownIPs" to true`)
+	if config.SelfDNSQueue > 0 && !preformReverseLookups && len(allCacheHostnames) == 0 {
+		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cacheHostnames" is non-empty`)
 	}
 
 	// if 'selfDNSQueue' is specified, create a filter that will allow
-	// Egress Eddie to only make reverse IP lookups
+	// Egress Eddie to only make required DNS queries
 	if config.SelfDNSQueue > 0 {
 		selfFilter := FilterOptions{
 			DNSQueue: config.SelfDNSQueue,
 			IPv6:     config.IPv6,
-			Hostnames: []string{
+		}
+
+		if preformReverseLookups {
+			selfFilter.AllowedHostnames = []string{
 				"in-addr.arpa",
 				"ip6.arpa",
-			},
+			}
+		}
+		if len(allCacheHostnames) > 0 {
+			selfFilter.AllowedHostnames = append(selfFilter.AllowedHostnames, allCacheHostnames...)
 		}
 
 		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)

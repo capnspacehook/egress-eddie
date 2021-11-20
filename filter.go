@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/florianl/go-nfqueue"
@@ -37,6 +38,8 @@ type FilterManager struct {
 }
 
 type filter struct {
+	wg sync.WaitGroup
+
 	opts *FilterOptions
 
 	logger *zap.Logger
@@ -49,6 +52,8 @@ type filter struct {
 	// standard library (1.18?)
 	allowedIPs          *TimedCache
 	additionalHostnames *TimedCache
+
+	isSelfFilter bool
 }
 
 func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
@@ -66,7 +71,8 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 	f.dnsRespNF = nf
 
 	for i := range config.Filters {
-		filter, err := startFilter(ctx, logger, &config.Filters[i])
+		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
+		filter, err := startFilter(ctx, logger, &config.Filters[i], isSelfFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -80,16 +86,18 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 func (f *FilterManager) Stop() {
 	for i := range f.filters {
 		f.filters[i].close()
+		f.filters[i].wg.Wait()
 	}
 
 	f.dnsRespNF.Close()
 }
 
-func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (*filter, error) {
+func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool) (*filter, error) {
 	f := filter{
-		opts:        opts,
-		logger:      logger,
-		connections: NewTimedCache(logger, true),
+		opts:         opts,
+		logger:       logger,
+		connections:  NewTimedCache(logger, true),
+		isSelfFilter: isSelfFilter,
 	}
 
 	if opts.TrafficQueue != 0 {
@@ -101,6 +109,15 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions) (
 			return nil, fmt.Errorf("error opening nfqueue: %v", err)
 		}
 		f.genericNF = genericNF
+
+		if len(f.opts.CacheHostnames) > 0 {
+			f.wg.Add(1)
+			go func() {
+				defer f.wg.Done()
+
+				f.cacheHostnames(ctx, logger)
+			}()
+		}
 	}
 
 	dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
@@ -139,6 +156,49 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 	logger.Info("started nfqueue", zap.Uint16("nfqueue", queueNum))
 
 	return nf, nil
+}
+
+func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
+	logger.Debug("starting cache loop")
+
+	var (
+		ttl   = f.opts.ReCacheEvery + time.Minute
+		res   = new(net.Resolver)
+		timer = time.NewTimer(f.opts.ReCacheEvery)
+	)
+
+	for {
+		for i := range f.opts.CacheHostnames {
+			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CacheHostnames[i]))
+			addrs, err := res.LookupHost(ctx, f.opts.CacheHostnames[i])
+			if err != nil {
+				var dnsErr *net.DNSError
+				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CacheHostnames[i]))
+					continue
+				}
+				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CacheHostnames[i]), zap.NamedError("error", err))
+				continue
+			}
+
+			for i := range addrs {
+				logger.Info("allowing IP from cached lookup", zap.String("ip", addrs[i]), zap.Duration("ttl", ttl))
+				f.allowedIPs.AddEntry(addrs[i], ttl)
+			}
+
+		}
+
+		timer.Reset(f.opts.ReCacheEvery)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			logger.Debug("exiting cache loop")
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (f *filter) close() {
@@ -291,8 +351,8 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 }
 
 func (f *filter) hostnameAllowed(hostname string) bool {
-	for j := range f.opts.Hostnames {
-		if hostname == f.opts.Hostnames[j] || strings.HasSuffix(hostname, "."+f.opts.Hostnames[j]) {
+	for j := range f.opts.AllowedHostnames {
+		if hostname == f.opts.AllowedHostnames[j] || strings.HasSuffix(hostname, "."+f.opts.AllowedHostnames[j]) {
 			return true
 		}
 	}
@@ -362,42 +422,48 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		logger.Debug("removing connection")
 		connFilter.connections.RemoveEntry(connID)
 
-		// validate DNS response questions are for allowed
-		// hostnames, drop them otherwise; responses for disallowed
-		// hostnames should never happen in theory, because we
-		// block requests for disallowed hostnames but it doesn't
-		// hurt to check
-		if !connFilter.opts.AllowAllHostnames && !connFilter.validateDNSQuestions(logger, dns) {
-			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.NamedError("error", err))
+		// allow and don't process the DNS response if all hostnames
+		// are allowed
+		if !connFilter.opts.AllowAllHostnames {
+			// validate DNS response questions are for allowed
+			// hostnames, drop them otherwise; responses for disallowed
+			// hostnames should never happen in theory, because we
+			// block requests for disallowed hostnames but it doesn't
+			// hurt to check
+			if !connFilter.validateDNSQuestions(logger, dns) {
+				if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+					logger.Error("error setting verdict", zap.NamedError("error", err))
+				}
+				return 0
 			}
-			return 0
-		}
 
-		if !connFilter.opts.AllowAllHostnames && dns.ANCount > 0 {
-			for _, answer := range dns.Answers {
-				if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
-					// temporarily add A and AAAA answers to
-					// allowed IP list
-					ipStr := answer.IP.String()
-					ttl := connFilter.getTTL(answer.TTL)
-					logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Duration("answer.ttl", ttl))
+			// don't process the DNS response if the filter it came
+			// from is the self filter
+			if !connFilter.isSelfFilter && dns.ANCount > 0 {
+				for _, answer := range dns.Answers {
+					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
+						// temporarily add A and AAAA answers to
+						// allowed IP list
+						ipStr := answer.IP.String()
+						ttl := connFilter.getTTL(answer.TTL)
+						logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Duration("answer.ttl", ttl))
 
-					connFilter.allowedIPs.AddEntry(ipStr, ttl)
-				} else if answer.Type == layers.DNSTypeCNAME {
-					// temporarily add CNAME answers to allowed
-					// hostnames list
-					ttl := connFilter.getTTL(answer.TTL)
-					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
+						connFilter.allowedIPs.AddEntry(ipStr, ttl)
+					} else if answer.Type == layers.DNSTypeCNAME {
+						// temporarily add CNAME answers to allowed
+						// hostnames list
+						ttl := connFilter.getTTL(answer.TTL)
+						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
 
-					connFilter.additionalHostnames.AddEntry(string(answer.CNAME), connFilter.getTTL(answer.TTL))
-				} else if answer.Type == layers.DNSTypeSRV {
-					// temporarily add SRV answers to allowed
-					// hostnames list
-					ttl := connFilter.getTTL(answer.TTL)
-					logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
+						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), connFilter.getTTL(answer.TTL))
+					} else if answer.Type == layers.DNSTypeSRV {
+						// temporarily add SRV answers to allowed
+						// hostnames list
+						ttl := connFilter.getTTL(answer.TTL)
+						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
 
-					connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), connFilter.getTTL(answer.TTL))
+						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), connFilter.getTTL(answer.TTL))
+					}
 				}
 			}
 		}
