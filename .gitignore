@@ -1,0 +1,6 @@
+*.log
+*.toml
+*.sh
+
+eddie
+egress-eddie
