@@ -34,8 +34,13 @@ func ParseConfig(confPath string) (*Config, error) {
 		return nil, err
 	}
 
+	return parseConfigBytes(data)
+}
+
+func parseConfigBytes(cb []byte) (*Config, error) {
 	var config Config
-	if err := toml.Unmarshal(data, &config); err != nil {
+
+	if err := toml.Unmarshal(cb, &config); err != nil {
 		return nil, err
 	}
 
@@ -58,7 +63,10 @@ func ParseConfig(confPath string) (*Config, error) {
 			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must be set`, i)
 		}
 		if filterOpt.AllowAllHostnames && filterOpt.TrafficQueue > 0 {
-			return nil, fmt.Errorf(`filter #%d: "trafficQueue" should not be set when "allowAllHostnames" is true`, i)
+			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must not be set when "allowAllHostnames" is true`, i)
+		}
+		if filterOpt.DNSQueue == filterOpt.TrafficQueue {
+			return nil, fmt.Errorf(`filter #%d: "dnsQueue" and "trafficQueue" must be different`, i)
 		}
 		if !filterOpt.AllowAllHostnames && len(filterOpt.CacheHostnames) == 0 && len(filterOpt.AllowedHostnames) == 0 {
 			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be non-empty`, i)
@@ -84,8 +92,14 @@ func ParseConfig(confPath string) (*Config, error) {
 		}
 	}
 
+	if config.SelfDNSQueue == 0 && (preformReverseLookups || len(allCacheHostnames) > 0) {
+		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cacheHostnames" is non-empty`)
+	}
 	if config.SelfDNSQueue > 0 && !preformReverseLookups && len(allCacheHostnames) == 0 {
 		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cacheHostnames" is non-empty`)
+	}
+	if config.InboundDNSQueue == config.SelfDNSQueue {
+		return nil, errors.New(`"inboundDNSQueue" and "selfDNSQueue" must be different`)
 	}
 
 	// if 'selfDNSQueue' is specified, create a filter that will allow
