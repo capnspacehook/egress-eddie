@@ -1,4 +1,7 @@
+*.bin
+*.html
 *.log
+*.out
 *.toml
 *.sh
 
