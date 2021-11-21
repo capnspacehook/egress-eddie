@@ -25,7 +25,7 @@ type FilterOptions struct {
 	AllowAnswersFor   time.Duration
 	ReCacheEvery      time.Duration
 	AllowedHostnames  []string
-	CacheHostnames    []string
+	CachedHostnames   []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -53,7 +53,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 	var (
 		preformReverseLookups bool
-		allCacheHostnames     []string
+		allCachedHostnames    []string
 	)
 	for i, filterOpt := range config.Filters {
 		if filterOpt.DNSQueue == 0 {
@@ -68,35 +68,35 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.DNSQueue == filterOpt.TrafficQueue {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" and "trafficQueue" must be different`, i)
 		}
-		if !filterOpt.AllowAllHostnames && len(filterOpt.CacheHostnames) == 0 && len(filterOpt.AllowedHostnames) == 0 {
+		if !filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) == 0 && len(filterOpt.AllowedHostnames) == 0 {
 			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be non-empty`, i)
 		}
 		if filterOpt.AllowAllHostnames && len(filterOpt.AllowedHostnames) > 0 {
 			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be empty when "allowAllHostnames" is true`, i)
 		}
-		if filterOpt.AllowAllHostnames && len(filterOpt.CacheHostnames) > 0 {
-			return nil, fmt.Errorf(`filter #%d: "cacheHostnames" must be empty when "allowAllHostnames" is true`, i)
+		if filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: "cachedHostnames" must be empty when "allowAllHostnames" is true`, i)
 		}
-		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CacheHostnames) > 0 {
-			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must be set when "cacheHostnames" is non-empty`, i)
+		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedHostnames) > 0 {
+			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must be set when "cachedHostnames" is non-empty`, i)
 		}
-		if filterOpt.ReCacheEvery > 0 && len(filterOpt.CacheHostnames) == 0 {
-			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must not be set when "cacheHostnames" is empty`, i)
+		if filterOpt.ReCacheEvery > 0 && len(filterOpt.CachedHostnames) == 0 {
+			return nil, fmt.Errorf(`filter #%d: "reCacheEvery" must not be set when "cachedHostnames" is empty`, i)
 		}
 
 		if filterOpt.LookupUnknownIPs {
 			preformReverseLookups = true
 		}
-		if len(filterOpt.CacheHostnames) > 0 {
-			allCacheHostnames = append(allCacheHostnames, filterOpt.CacheHostnames...)
+		if len(filterOpt.CachedHostnames) > 0 {
+			allCachedHostnames = append(allCachedHostnames, filterOpt.CachedHostnames...)
 		}
 	}
 
-	if config.SelfDNSQueue == 0 && (preformReverseLookups || len(allCacheHostnames) > 0) {
-		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cacheHostnames" is non-empty`)
+	if config.SelfDNSQueue == 0 && (preformReverseLookups || len(allCachedHostnames) > 0) {
+		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is non-empty`)
 	}
-	if config.SelfDNSQueue > 0 && !preformReverseLookups && len(allCacheHostnames) == 0 {
-		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cacheHostnames" is non-empty`)
+	if config.SelfDNSQueue > 0 && !preformReverseLookups && len(allCachedHostnames) == 0 {
+		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is non-empty`)
 	}
 	if config.InboundDNSQueue == config.SelfDNSQueue {
 		return nil, errors.New(`"inboundDNSQueue" and "selfDNSQueue" must be different`)
@@ -116,8 +116,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 				"ip6.arpa",
 			}
 		}
-		if len(allCacheHostnames) > 0 {
-			selfFilter.AllowedHostnames = append(selfFilter.AllowedHostnames, allCacheHostnames...)
+		if len(allCachedHostnames) > 0 {
+			selfFilter.AllowedHostnames = append(selfFilter.AllowedHostnames, allCachedHostnames...)
 		}
 
 		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)

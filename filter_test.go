@@ -86,7 +86,7 @@ dnsQueue = 9999 # not used
 trafficQueue = 1001
 ipv6 = false
 reCacheEvery = "1m"
-cacheHostnames = [
+cachedHostnames = [
 	"digitalocean.com",
 ]`
 

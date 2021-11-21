@@ -110,7 +110,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		}
 		f.genericNF = genericNF
 
-		if len(f.opts.CacheHostnames) > 0 {
+		if len(f.opts.CachedHostnames) > 0 {
 			f.wg.Add(1)
 			go func() {
 				defer f.wg.Done()
@@ -168,16 +168,16 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	)
 
 	for {
-		for i := range f.opts.CacheHostnames {
-			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CacheHostnames[i]))
-			addrs, err := res.LookupHost(ctx, f.opts.CacheHostnames[i])
+		for i := range f.opts.CachedHostnames {
+			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
+			addrs, err := res.LookupHost(ctx, f.opts.CachedHostnames[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CacheHostnames[i]))
+					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
 					continue
 				}
-				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CacheHostnames[i]), zap.NamedError("error", err))
+				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
 				continue
 			}
 
