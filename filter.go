@@ -404,11 +404,11 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		}
 		logger := logger.With(zap.String("conn.id", connID))
 
-		// TODO: optimize
 		var connFilter *filter
 		for _, filter := range f.filters {
 			if filter.connections.EntryExists(connID) {
 				connFilter = filter
+				break
 			}
 		}
 		if connFilter == nil {
