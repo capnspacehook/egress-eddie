@@ -75,6 +75,32 @@ allowedHostnames = [
 	stop()
 }
 
+func TestAllowAll(t *testing.T) {
+	configStr := `
+inboundDNSQueue = 1
+ipv6 = false
+
+[[filters]]
+dnsQueue = 1000
+ipv6 = false
+allowAllHostnames = true`
+
+	client, stop := initFilters(
+		t,
+		configStr,
+		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+		"-A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queue-num 1000",
+	)
+
+	is := is.New(t)
+
+	resp, err := client.Get("https://harmony.shinesparkers.net")
+	is.NoErr(err) // request to hostname should succeed
+	resp.Body.Close()
+
+	stop()
+}
+
 func TestCaching(t *testing.T) {
 	configStr := `
 inboundDNSQueue = 1
