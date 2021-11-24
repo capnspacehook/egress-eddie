@@ -32,6 +32,10 @@ func NewTimedCache(logger *zap.Logger, count bool) *TimedCache {
 }
 
 func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
+	if t == nil {
+		return
+	}
+
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
@@ -66,6 +70,10 @@ func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
 }
 
 func (t *TimedCache) EntryExists(key string) bool {
+	if t == nil {
+		return false
+	}
+
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 
@@ -75,6 +83,10 @@ func (t *TimedCache) EntryExists(key string) bool {
 }
 
 func (t *TimedCache) RemoveEntry(key string) {
+	if t == nil {
+		return
+	}
+
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
