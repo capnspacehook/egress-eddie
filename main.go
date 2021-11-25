@@ -42,20 +42,28 @@ func main() {
 
 	config, err := ParseConfig(configPath)
 	if err != nil {
-		logger.Fatal("error parsing config", zap.String("error", err.Error()))
+		logger.Fatal("error parsing config", zap.NamedError("error", err))
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
 
 	filters, err := StartFilters(ctx, logger, config)
 	if err != nil {
-		logger.Fatal("error starting filters", zap.String("error", err.Error()))
+		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}
 	logger.Info("started filtering")
 
-	<-ctx.Done()
+	defer func() {
+		cancel()
+		logger.Info("stopping filters")
+		filters.Stop()
+	}()
 
-	logger.Info("stopping filters")
-	filters.Stop()
+	logger.Debug("applying seccomp filters")
+	if err := installSeccompFilters(logger, config.SelfDNSQueue != 0); err != nil {
+		logger.Error("error setting seccomp rules", zap.NamedError("error", err))
+		return
+	}
+
+	<-ctx.Done()
 }

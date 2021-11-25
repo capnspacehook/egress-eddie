@@ -10,7 +10,8 @@ require (
 	github.com/mdlayher/netlink v1.4.1
 	github.com/pelletier/go-toml v1.9.4
 	go.uber.org/zap v1.19.1
-	golang.org/x/sys v0.0.0-20210820121016-41cdb8703e55
+	golang.org/x/sys v0.0.0-20211123173158-ef496fb156ab
+	gvisor.dev/gvisor v0.0.0-20211124014810-d07633871257
 )
 
 require (
