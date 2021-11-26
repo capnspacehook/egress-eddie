@@ -144,6 +144,33 @@ allowedHostnames = ["foo"]`,
 			expectedErr:    `filter #0: "reCacheEvery" must not be set when "cachedHostnames" is empty`,
 		},
 		{
+			testName: "dnsQueue set and cachedHostnames non-empty",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+dnsQueue = 1000
+trafficQueue = 1001
+reCacheEvery = "1s"
+cachedHostnames = ["foo"]`,
+			expectedConfig: nil,
+			expectedErr:    `filter #0: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is non-empty or "lookupUnknownIPs" is true`,
+		},
+		{
+			testName: "dnsQueue and lookupUnknownIPs set",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+dnsQueue = 1000
+trafficQueue = 1001
+lookupUnknownIPs = true`,
+			expectedConfig: nil,
+			expectedErr:    `filter #0: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is non-empty or "lookupUnknownIPs" is true`,
+		},
+		{
 			testName: "selfDNSQueue set",
 			configStr: `
 inboundDNSQueue = 1
@@ -249,7 +276,6 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
-dnsQueue = 1000
 trafficQueue = 1001
 reCacheEvery = "1s"
 cachedHostnames = [
@@ -268,13 +294,40 @@ cachedHostnames = [
 						},
 					},
 					{
-						DNSQueue:     1000,
 						TrafficQueue: 1001,
 						ReCacheEvery: time.Second,
 						CachedHostnames: []string{
 							"oof",
 							"rab",
 						},
+					},
+				},
+			},
+			expectedErr: "",
+		},
+		{
+			testName: "valid lookupUnknownIPs",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+trafficQueue = 1001
+lookupUnknownIPs = true`,
+			expectedConfig: &Config{
+				InboundDNSQueue: 1,
+				SelfDNSQueue:    100,
+				Filters: []FilterOptions{
+					{
+						DNSQueue: 100,
+						AllowedHostnames: []string{
+							"in-addr.arpa",
+							"ip6.arpa",
+						},
+					},
+					{
+						TrafficQueue:     1001,
+						LookupUnknownIPs: true,
 					},
 				},
 			},
@@ -329,7 +382,47 @@ allowedHostnames = [
 			expectedErr: "",
 		},
 		{
-			testName: "valid lookupUnknownIPs is set",
+			testName: "valid lookupUnknownIPs",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+dnsQueue = 1000
+trafficQueue = 1001
+lookupUnknownIPs = true
+allowedHostnames = [
+	"foo",
+	"bar",
+	"baz.barf",
+]`,
+			expectedConfig: &Config{
+				InboundDNSQueue: 1,
+				SelfDNSQueue:    100,
+				Filters: []FilterOptions{
+					{
+						DNSQueue: 100,
+						AllowedHostnames: []string{
+							"in-addr.arpa",
+							"ip6.arpa",
+						},
+					},
+					{
+						DNSQueue:         1000,
+						TrafficQueue:     1001,
+						LookupUnknownIPs: true,
+						AllowedHostnames: []string{
+							"foo",
+							"bar",
+							"baz.barf",
+						},
+					},
+				},
+			},
+			expectedErr: "",
+		},
+		{
+			testName: "valid lookupUnknownIPs is set and cachedHostnames is non-empty",
 			configStr: `
 inboundDNSQueue = 1
 selfDNSQueue = 100
