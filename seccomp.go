@@ -77,36 +77,35 @@ var allowedSyscalls = seccomp.SyscallRules{
 	unix.SYS_GETPID:  {},
 	unix.SYS_GETTID:  {},
 	unix.SYS_MADVISE: {},
-	unix.SYS_MMAP: []seccomp.Rule{
+	unix.SYS_MMAP: {
 		{
 			seccomp.MatchAny{},
 			seccomp.MatchAny{},
-			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.PROT_READ | unix.PROT_WRITE),
 			seccomp.EqualTo(unix.MAP_SHARED),
+			seccomp.GreaterThan(0),
+			seccomp.EqualTo(0),
 		},
 		{
 			seccomp.MatchAny{},
 			seccomp.MatchAny{},
-			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.PROT_READ | unix.PROT_WRITE),
 			seccomp.EqualTo(unix.MAP_PRIVATE | unix.MAP_ANONYMOUS),
+			seccomp.GreaterThan(0),
+			seccomp.EqualTo(0),
 		},
 		{
 			seccomp.MatchAny{},
 			seccomp.MatchAny{},
-			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.PROT_READ | unix.PROT_WRITE),
 			seccomp.EqualTo(unix.MAP_PRIVATE | unix.MAP_ANONYMOUS | unix.MAP_FIXED),
+			seccomp.GreaterThan(0),
+			seccomp.EqualTo(0),
 		},
 	},
+	unix.SYS_MUNMAP:     {},
 	unix.SYS_NANOSLEEP:  {},
 	unix.SYS_NEWFSTATAT: {},
-	unix.SYS_OPENAT: {
-		{
-			seccomp.MatchAny{},
-			seccomp.MatchAny{},
-			seccomp.EqualTo(unix.O_RDONLY | unix.O_CLOEXEC),
-		},
-	},
-	unix.SYS_READ: {},
 	unix.SYS_RECVMSG: {
 		{
 			seccomp.MatchAny{},
@@ -140,6 +139,14 @@ var allowedSyscalls = seccomp.SyscallRules{
 }
 
 var networkSyscalls = seccomp.SyscallRules{
+	unix.SYS_OPENAT: {
+		{
+			seccomp.MatchAny{},
+			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.O_RDONLY | unix.O_CLOEXEC),
+		},
+	},
+	unix.SYS_READ:        {},
 	unix.SYS_CONNECT:     {},
 	unix.SYS_GETPEERNAME: {},
 	unix.SYS_GETSOCKNAME: {},
@@ -181,18 +188,16 @@ type nullEmitter struct{}
 func (nullEmitter) Emit(depth int, level log.Level, timestamp time.Time, format string, v ...interface{}) {
 }
 
-func installSeccompFilters(logger *zap.Logger, needsNetworking bool) error {
-	s := allowedSyscalls
-
+func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error) {
 	// only allow Egress Eddie to make outbound connections if DNS
 	// requests will need to be made directly
 	if needsNetworking {
 		logger.Debug("allowing networking syscalls")
-		s.Merge(networkSyscalls)
+		allowedSyscalls.Merge(networkSyscalls)
 	}
 
 	// disable logging from seccomp package
 	log.SetTarget(&nullEmitter{})
 
-	return seccomp.Install(allowedSyscalls)
+	return len(allowedSyscalls), seccomp.Install(allowedSyscalls)
 }

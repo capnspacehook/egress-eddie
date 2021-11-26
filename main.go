@@ -59,11 +59,12 @@ func main() {
 		filters.Stop()
 	}()
 
-	logger.Debug("applying seccomp filters")
-	if err := installSeccompFilters(logger, config.SelfDNSQueue != 0); err != nil {
+	numAllowedSyscalls, err := installSeccompFilters(logger, config.SelfDNSQueue != 0)
+	if err != nil {
 		logger.Error("error setting seccomp rules", zap.NamedError("error", err))
 		return
 	}
+	logger.Info("applied seccomp filters", zap.Int("syscalls.allowed", numAllowedSyscalls))
 
 	<-ctx.Done()
 }
