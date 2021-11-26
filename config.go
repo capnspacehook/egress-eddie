@@ -59,22 +59,22 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.DNSQueue == 0 {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" must be set`, i)
 		}
-		if !filterOpt.AllowAllHostnames && filterOpt.TrafficQueue == 0 {
+		if filterOpt.TrafficQueue == 0 && !filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must be set`, i)
 		}
-		if filterOpt.AllowAllHostnames && filterOpt.TrafficQueue > 0 {
+		if filterOpt.TrafficQueue > 0 && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter #%d: "trafficQueue" must not be set when "allowAllHostnames" is true`, i)
 		}
 		if filterOpt.DNSQueue == filterOpt.TrafficQueue {
 			return nil, fmt.Errorf(`filter #%d: "dnsQueue" and "trafficQueue" must be different`, i)
 		}
-		if !filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) == 0 && len(filterOpt.AllowedHostnames) == 0 {
+		if len(filterOpt.AllowedHostnames) == 0 && !filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) == 0 {
 			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be non-empty`, i)
 		}
-		if filterOpt.AllowAllHostnames && len(filterOpt.AllowedHostnames) > 0 {
+		if len(filterOpt.AllowedHostnames) > 0 && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter #%d: "allowedHostnames" must be empty when "allowAllHostnames" is true`, i)
 		}
-		if filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) > 0 {
+		if len(filterOpt.CachedHostnames) > 0 && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter #%d: "cachedHostnames" must be empty when "allowAllHostnames" is true`, i)
 		}
 		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedHostnames) > 0 {
