@@ -120,11 +120,13 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		}
 	}
 
-	dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
-	if err != nil {
-		return nil, fmt.Errorf("error opening nfqueue: %v", err)
+	if opts.DNSQueue != 0 {
+		dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
+		if err != nil {
+			return nil, fmt.Errorf("error opening nfqueue: %v", err)
+		}
+		f.dnsReqNF = dnsNF
 	}
-	f.dnsReqNF = dnsNF
 
 	return &f, nil
 }
@@ -202,7 +204,9 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 }
 
 func (f *filter) close() {
-	f.dnsReqNF.Close()
+	if f.dnsReqNF != nil {
+		f.dnsReqNF.Close()
+	}
 	if f.genericNF != nil {
 		f.genericNF.Close()
 	}
