@@ -7,12 +7,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type TimedCache struct {
+type TimedCache[T comparable] struct {
 	mtx    sync.RWMutex
 	logger *zap.Logger
 
-	// TODO: make generic once 1.18 lands
-	cache map[string]*pair
+	cache map[T]*pair
 	count bool
 }
 
@@ -21,17 +20,17 @@ type pair struct {
 	timer *time.Timer
 }
 
-func NewTimedCache(logger *zap.Logger, count bool) *TimedCache {
-	var t TimedCache
+func NewTimedCache[T comparable](logger *zap.Logger, count bool) *TimedCache[T] {
+	var t TimedCache[T]
 
 	t.logger = logger
-	t.cache = make(map[string]*pair)
+	t.cache = make(map[T]*pair)
 	t.count = count
 
 	return &t
 }
 
-func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
+func (t *TimedCache[T]) AddEntry(key T, ttl time.Duration) {
 	if t == nil {
 		return
 	}
@@ -42,7 +41,7 @@ func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
 	p, ok := t.cache[key]
 	if ok {
 		if t.count {
-			t.logger.Debug("incrementing count", zap.String("key", key))
+			t.logger.Debug("incrementing count", zap.Any("key", key))
 			p.count++
 		}
 
@@ -61,7 +60,7 @@ func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
 
 	go func() {
 		<-timer.C
-		t.logger.Debug("deleting entry", zap.String("key", key))
+		t.logger.Debug("deleting entry", zap.Any("key", key))
 
 		t.mtx.Lock()
 		delete(t.cache, key)
@@ -69,7 +68,7 @@ func (t *TimedCache) AddEntry(key string, ttl time.Duration) {
 	}()
 }
 
-func (t *TimedCache) EntryExists(key string) bool {
+func (t *TimedCache[T]) EntryExists(key T) bool {
 	if t == nil {
 		return false
 	}
@@ -82,7 +81,7 @@ func (t *TimedCache) EntryExists(key string) bool {
 	return ok
 }
 
-func (t *TimedCache) RemoveEntry(key string) {
+func (t *TimedCache[T]) RemoveEntry(key T) {
 	if t == nil {
 		return
 	}
@@ -96,11 +95,11 @@ func (t *TimedCache) RemoveEntry(key string) {
 	}
 
 	if p.count != 0 {
-		t.logger.Debug("decrementing count", zap.String("key", key))
+		t.logger.Debug("decrementing count", zap.Any("key", key))
 		p.count--
 		return
 	}
-	t.logger.Debug("deleting entry", zap.String("key", key))
+	t.logger.Debug("deleting entry", zap.Any("key", key))
 
 	if !p.timer.Stop() {
 		<-p.timer.C
