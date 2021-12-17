@@ -6,11 +6,16 @@ by hostname you need a proxy for the specific protocol you're trying to filter. 
 allows you to filter all TCP and UDP traffic by hostname, regardless of the protocol being used
 on top.
 
+Filtering by hostname can make it exceedingly difficult for both malware to phone home and misbehaving
+software to send unwanted telemetry. Combined with strong egress firewall rules, Egress Eddie can
+act as a failsafe, preventing attackers that are able to execute code on your machine from exfiltrating
+data or interactively taking control.
+
 ## How it works
 
-Egress Eddie utilizes nfqueue to intercept packets from iptables or nftables. It then filters DNS
-requests, only allowing requests for allowed hostnames. DNS responses to those requests are tracked,
-and the IP addresses or hostnames present in DNS responses are allowed outbound for a configurable 
+Egress Eddie utilizes nfqueue to intercept configured packets from iptables or nftables. It then filters
+DNS requests, only allowing requests for allowed hostnames. DNS responses to those requests are tracked,
+and only the IP addresses or hostnames present in DNS responses are allowed outbound for a configurable 
 amount of time.
 
 ## Details
@@ -26,20 +31,28 @@ a suffix. For example, if `google.com` is an allowed hostname, DNS requests for
 
 Accepted DNS answers of type `A` and `AAAA` cause the contained IPs to be allowed. DNS answers of type
 `CNAME` and `SRV` cause the contained hostnames to be allowed to be queried. All other accepted DNS
-answer types are passed through with no action taken.
+answer types are passed through to the sender with no action taken by Egress Eddie.
 
 Normal traffic is only parsed up to the network layer (`IPv4` or `IPv6`). The source and destination
 IP addresses are inspected to ensure they match IPs returned from accepted DNS answers.
 
+## Security
+
+Egress Eddie leverages `seccomp` to ensure that it will only use a handful of syscalls (default 24)
+with filtered arguments. This makes it very difficult for an attacker to do anything of value if
+they are somehow able to execute code in the context of a running Egress Eddie process.
+
 ## Permissions required
 
-After building, either run the binary as root or give it necessary capabilities:
+After building, give the binary necessary capabilities:
 
 ```bash
 setcap 'cap_net_admin=+ep' egress-eddie
 ```
 
-Special permissions are needed to interface with nfqueue.
+Special permissions are needed to interface with nfqueue. 
+
+Alternatively, you *could* run Egress Eddie as root, though that is not recommended from a security standpoint.
 
 ## Installing
 
@@ -133,7 +146,7 @@ dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
 allowAnswersFor = "5m"
-hostnames = [
+allowedHostnames = [
     "github.com",
 ]
 ```
@@ -202,7 +215,7 @@ ipv6 = false
 dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
-hostnames = [
+allowedHostnames = [
     "deb.debian.org",
     "security.debian.org",
 ]
@@ -212,7 +225,7 @@ hostnames = [
 dnsQueue = 2000
 trafficQueue = 2001
 ipv6 = false
-hostnames = [
+allowedHostnames = [
     "proxy.golang.org",
     "sum.golang.org",
 ]
