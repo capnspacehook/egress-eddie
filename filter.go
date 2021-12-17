@@ -21,10 +21,6 @@ import (
 const (
 	state_new         = 2
 	state_established = 3
-
-	// used when allowing IPs after a reverse lookup and if
-	// 'allowAnswersFor' isn't set
-	default_ttl = 60
 )
 
 type FilterManager struct {
@@ -470,24 +466,24 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 						// temporarily add A and AAAA answers to
 						// allowed IP list
 						ipStr := answer.IP.String()
-						ttl := connFilter.getTTL(answer.TTL)
+						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Duration("answer.ttl", ttl))
 
 						connFilter.allowedIPs.AddEntry(ipStr, ttl)
 					} else if answer.Type == layers.DNSTypeCNAME {
 						// temporarily add CNAME answers to allowed
 						// hostnames list
-						ttl := connFilter.getTTL(answer.TTL)
+						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
 
-						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), connFilter.getTTL(answer.TTL))
+						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), ttl)
 					} else if answer.Type == layers.DNSTypeSRV {
 						// temporarily add SRV answers to allowed
 						// hostnames list
-						ttl := connFilter.getTTL(answer.TTL)
+						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
 
-						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), connFilter.getTTL(answer.TTL))
+						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), ttl)
 					}
 				}
 			}
@@ -500,14 +496,6 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 
 		return 0
 	}
-}
-
-func (f *filter) getTTL(ttl uint32) time.Duration {
-	if f.opts.AllowAnswersFor != 0 {
-		return f.opts.AllowAnswersFor
-	}
-
-	return time.Duration(ttl) * time.Second
 }
 
 func newGenericCallback(f *filter) nfqueue.HookFunc {
@@ -639,7 +627,7 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip string) (bool, error
 		}
 
 		if f.hostnameAllowed(names[i]) {
-			ttl := f.getTTL(default_ttl)
+			ttl := f.opts.AllowAnswersFor
 			logger.Info("allowing IP after reverse lookup", zap.String("ip", ip), zap.Duration("ttl", ttl))
 			f.allowedIPs.AddEntry(ip, ttl)
 			return true, nil
