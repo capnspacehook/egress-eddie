@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	state_new         = 2
 	state_established = 3
 
 	// used when allowing IPs after a reverse lookup and if
@@ -226,12 +227,32 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			return 0
 		}
 
+		// verify DNS request is from a new or established connection
+		if *attr.CtInfo != state_new && *attr.CtInfo != state_established {
+			logger.Warn("dropping DNS request with unknown state")
+
+			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+				logger.Error("error setting verdict", zap.String("error", err.Error()))
+			}
+			return 0
+		}
+
 		dns, connID, err := parseDNSPacket(*attr.Payload, f.opts.IPv6, false)
 		if err != nil {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
 		}
 		logger := logger.With(zap.String("conn.id", connID))
+
+		// drop DNS replies, they shouldn't be going to this filter
+		if dns.ANCount > 0 {
+			logger.Warn("dropping DNS reply sent to DNS request filter")
+
+			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+				logger.Error("error setting verdict", zap.String("error", err.Error()))
+			}
+			return 0
+		}
 
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
@@ -337,7 +358,7 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		logger.Info("dropping dns request with no questions")
+		logger.Info("dropping DNS request with no questions")
 		return false
 	}
 
