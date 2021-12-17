@@ -215,6 +215,7 @@ ipv6 = false
 dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
+allowAnswersFor = "30m"
 allowedHostnames = [
     "deb.debian.org",
     "security.debian.org",
@@ -225,6 +226,7 @@ allowedHostnames = [
 dnsQueue = 2000
 trafficQueue = 2001
 ipv6 = false
+allowAnswersFor = "5m"
 allowedHostnames = [
     "proxy.golang.org",
     "sum.golang.org",
