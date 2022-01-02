@@ -18,9 +18,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// from github.com/torvalds/linux/tree/master/include/uapi/linux/netfilter/nf_conntrack_common.h
 const (
-	state_new         = 2
-	state_established = 3
+	state_established = iota
+	state_related
+	state_new
+	state_is_reply
+	state_established_reply = state_established + state_is_reply
+	state_related_reply     = state_related + state_is_reply
+	state_untracked         = 7
 )
 
 type FilterManager struct {
@@ -224,8 +230,8 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		}
 
 		// verify DNS request is from a new or established connection
-		if *attr.CtInfo != state_new && *attr.CtInfo != state_established {
-			logger.Warn("dropping DNS request with unknown state")
+		if *attr.CtInfo != state_new && !connIsEstablished(*attr.CtInfo) {
+			logger.Warn("dropping DNS request with unknown state", zap.Uint32("conn.state", *attr.CtInfo))
 
 			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
@@ -274,6 +280,10 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 
 		return 0
 	}
+}
+
+func connIsEstablished(state uint32) bool {
+	return state == state_established || state == state_related || state == state_is_reply || state == state_related_reply
 }
 
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, error) {
@@ -409,8 +419,8 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		// local attacker can't connect to disallowed IPs by
 		// sending a DNS response with an attacker specified IP
 		// as an answer, thereby allowing that IP
-		if *attr.CtInfo != state_established {
-			logger.Warn("dropping DNS response with that is not from an established connection")
+		if !connIsEstablished(*attr.CtInfo) {
+			logger.Warn("dropping DNS response with that is not from an established connection", zap.Uint32("conn.state", *attr.CtInfo))
 
 			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
