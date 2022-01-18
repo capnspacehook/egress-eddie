@@ -163,7 +163,7 @@ from DNS responses are allowed for. The syntax for specifying a duration is the
 [Go duration syntax](https://pkg.go.dev/time#ParseDuration). If `allowAnswersFor` is
 not set, it defaults to the TTL of the DNS response.
 
-Finally `hostnames` controls the hostnames that are allowed, which here is just `github.com`.
+Finally `allowedHostnames` controls the hostnames that are allowed, which here is just `github.com`.
 
 ### Allowing all hostnames
 
@@ -172,8 +172,8 @@ of traffic, but allow other users or types of traffic flow unrestricted. I like 
 the root user to have unrestricted HTTP/S access for example, as if someone compromises the
 root account, then all other bets are off.
 
-To accomplish this, set `allowAllHostnames = true` and don't set either `trafficQueue` or
-`hostnames`. Because all DNS responses must be inspected by Egress Eddie in order for it to
+To accomplish this, set `allowAllHostnames = true` and don't set both `trafficQueue` and
+`allowedHostnames`. Because all DNS responses must be inspected by Egress Eddie in order for it to
 function properly, all DNS requests must go through Egress Eddie as well.
 
 ## Example
