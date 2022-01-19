@@ -142,6 +142,7 @@ inboundDNSQueue = 1
 ipv6 = false
 
 [[filters]]
+name = "example"
 dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
@@ -156,7 +157,8 @@ filtering `IPv4` traffic. If you are filtering `IPv6` traffic and using ip6table
 that to `true`.
 
 Next we create a filter, setting the nfqueue numbers used for DNS requests and traffic
-that we want filtered. 
+that we want filtered. The `name` of each filter is simply an identifier that will allow
+you to more easily read or search through Egress Eddie's logs.
 
 `allowAnswersFor` controls how long IPs and hostnames returned
 from DNS responses are allowed for. The syntax for specifying a duration is the 
@@ -212,6 +214,7 @@ ipv6 = false
 
 # filter apt updating
 [[filters]]
+name = "apt updating"
 dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
@@ -223,6 +226,7 @@ allowedHostnames = [
 
 # filter go module traffic
 [[filters]]
+name = "go modules"
 dnsQueue = 2000
 trafficQueue = 2001
 ipv6 = false
@@ -234,6 +238,7 @@ allowedHostnames = [
 
 # allow all root DNS requests
 [[filters]]
+name = "root allow all"
 dnsQueue = 3000
 ipv6 = false
 allowAllHostnames = true
