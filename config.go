@@ -57,8 +57,12 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	var (
 		preformReverseLookups bool
 		allCachedHostnames    []string
+
+		filterNames  = make(map[string]int)
+		filterQueues = make(map[uint16]string)
 	)
 	for i, filterOpt := range config.Filters {
+
 		if filterOpt.Name == "" {
 			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
 		}
@@ -99,11 +103,33 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
 		}
 
+		if idx, ok := filterNames[filterOpt.Name]; ok {
+			return nil, fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
+		}
+		if filterOpt.DNSQueue != 0 {
+			if name, ok := filterQueues[filterOpt.DNSQueue]; ok {
+				return nil, fmt.Errorf(`filter %q: dnsQueue %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue, name)
+			}
+		}
+		if filterOpt.TrafficQueue != 0 {
+			if name, ok := filterQueues[filterOpt.TrafficQueue]; ok {
+				return nil, fmt.Errorf(`filter %q: trafficQueue %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue, name)
+			}
+		}
+
 		if filterOpt.LookupUnknownIPs {
 			preformReverseLookups = true
 		}
 		if len(filterOpt.CachedHostnames) > 0 {
 			allCachedHostnames = append(allCachedHostnames, filterOpt.CachedHostnames...)
+		}
+
+		filterNames[filterOpt.Name] = i
+		if filterOpt.DNSQueue != 0 {
+			filterQueues[filterOpt.DNSQueue] = filterOpt.Name
+		}
+		if filterOpt.TrafficQueue != 0 {
+			filterQueues[filterOpt.TrafficQueue] = filterOpt.Name
 		}
 	}
 

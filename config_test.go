@@ -235,6 +235,72 @@ allowedHostnames = ["foo"]`,
 			expectedErr:    `"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`,
 		},
 		{
+			testName: "duplicate filter names",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+name = "foo"
+dnsQueue = 1000
+trafficQueue = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["foo"]
+
+[[filters]]
+name = "foo"
+dnsQueue = 2000
+trafficQueue = 2001
+allowAnswersFor = "10s"
+allowedHostnames = ["bar"]`,
+			expectedConfig: nil,
+			expectedErr:    `filter #1: filter name "foo" is already used by filter #0`,
+		},
+		{
+			testName: "duplicate dnsQueues",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+name = "foo"
+dnsQueue = 1000
+trafficQueue = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["foo"]
+
+[[filters]]
+name = "bar"
+dnsQueue = 1000
+trafficQueue = 2001
+allowAnswersFor = "10s"
+allowedHostnames = ["bar"]`,
+			expectedConfig: nil,
+			expectedErr:    `filter "bar": dnsQueue 1000 is already used by filter "foo"`,
+		},
+		{
+			testName: "duplicate trafficQueues",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+
+[[filters]]
+name = "foo"
+dnsQueue = 1000
+trafficQueue = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["foo"]
+
+[[filters]]
+name = "bar"
+dnsQueue = 2000
+trafficQueue = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["bar"]`,
+			expectedConfig: nil,
+			expectedErr:    `filter "bar": trafficQueue 1001 is already used by filter "foo"`,
+		},
+		{
 			testName: "valid allowAllHostnames is set",
 			configStr: `
 inboundDNSQueue = 1
