@@ -20,6 +20,7 @@ inboundDNSQueue = 1
 ipv6 = false
 
 [[filters]]
+name = "test"
 dnsQueue = 1000
 trafficQueue = 1001
 ipv6 = false
@@ -81,6 +82,7 @@ inboundDNSQueue = 1
 ipv6 = false
 
 [[filters]]
+name = "test"
 dnsQueue = 1000
 ipv6 = false
 allowAllHostnames = true`
@@ -108,6 +110,7 @@ selfDNSQueue = 100
 ipv6 = false
 
 [[filters]]
+name = "test"
 trafficQueue = 1001
 ipv6 = false
 reCacheEvery = "1m"

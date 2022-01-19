@@ -96,20 +96,25 @@ func (f *FilterManager) Stop() {
 }
 
 func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool) (*filter, error) {
+	filterLogger := logger
+	if opts.Name != "" {
+		filterLogger = filterLogger.With(zap.String("filter.name", opts.Name))
+	}
+
 	f := filter{
 		opts:         opts,
-		logger:       logger,
+		logger:       filterLogger,
 		connections:  NewTimedCache(logger, true),
 		isSelfFilter: isSelfFilter,
 	}
 
 	if opts.TrafficQueue != 0 {
-		f.allowedIPs = NewTimedCache(logger, false)
-		f.additionalHostnames = NewTimedCache(logger, false)
+		f.allowedIPs = NewTimedCache(f.logger, false)
+		f.additionalHostnames = NewTimedCache(filterLogger, false)
 
-		genericNF, err := startNfQueue(ctx, logger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
+		genericNF, err := startNfQueue(ctx, filterLogger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
 		if err != nil {
-			return nil, fmt.Errorf("error opening nfqueue: %v", err)
+			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
 		}
 		f.genericNF = genericNF
 
@@ -118,15 +123,15 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			go func() {
 				defer f.wg.Done()
 
-				f.cacheHostnames(ctx, logger)
+				f.cacheHostnames(ctx, filterLogger)
 			}()
 		}
 	}
 
 	if opts.DNSQueue != 0 {
-		dnsNF, err := startNfQueue(ctx, logger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
+		dnsNF, err := startNfQueue(ctx, filterLogger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
 		if err != nil {
-			return nil, fmt.Errorf("error opening nfqueue: %v", err)
+			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
 		}
 		f.dnsReqNF = dnsNF
 	}
@@ -158,7 +163,6 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 		nf.Close()
 		return nil, fmt.Errorf("error registering nfqueue: %v", err)
 	}
-	logger.Info("started nfqueue", zap.Uint16("nfqueue", queueNum))
 
 	return nf, nil
 }
@@ -216,7 +220,9 @@ func (f *filter) close() {
 }
 
 func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
-	logger := f.logger.With(zap.Uint16("queue.num", f.opts.DNSQueue))
+	logger := f.logger.With(zap.String("filter.type", "dns-req"))
+	logger = logger.With(zap.Uint16("queue.num", f.opts.DNSQueue))
+	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		if attr.PacketID == nil {
@@ -275,7 +281,6 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 			logger.Debug("removing connection")
 			f.connections.RemoveEntry(connID)
-			return 0
 		}
 
 		return 0
@@ -401,7 +406,9 @@ func questionStrings(dnsQs []layers.DNSQuestion) []string {
 }
 
 func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
-	logger := f.logger.With(zap.Uint16("queue.num", f.queueNum))
+	logger := f.logger.With(zap.String("filter.type", "dns-resp"))
+	logger = logger.With(zap.Uint16("queue.num", f.queueNum))
+	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		if attr.PacketID == nil {
@@ -453,6 +460,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		logger.Debug("removing connection")
 		connFilter.connections.RemoveEntry(connID)
 
+		logger = logger.With(zap.String("dns-req.filter.name", connFilter.opts.Name))
 		// allow and don't process the DNS response if all hostnames
 		// are allowed
 		if !connFilter.opts.AllowAllHostnames {
@@ -501,7 +509,6 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 
 		if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
-			return 0
 		}
 
 		return 0
@@ -509,7 +516,9 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 }
 
 func newGenericCallback(f *filter) nfqueue.HookFunc {
-	logger := f.logger.With(zap.Uint16("queue.num", f.opts.TrafficQueue))
+	logger := f.logger.With(zap.String("filter.type", "traffic"))
+	logger = logger.With(zap.Uint16("queue.num", f.opts.TrafficQueue))
+	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		if attr.PacketID == nil {

@@ -27,13 +27,23 @@ func TestParseConfig(t *testing.T) {
 			expectedErr:    `"inboundDNSQueue" must be set`,
 		},
 		{
-			testName: "dnsQueue not set",
+			testName: "name not set",
 			configStr: `
 inboundDNSQueue = 1
 
 [[filters]]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "dnsQueue" must be set`,
+			expectedErr:    `filter #0: "name" must be set`,
+		},
+		{
+			testName: "dnsQueue not set",
+			configStr: `
+inboundDNSQueue = 1
+
+[[filters]]
+name = "foo"`,
+			expectedConfig: nil,
+			expectedErr:    `filter "foo": "dnsQueue" must be set`,
 		},
 		{
 			testName: "trafficQueue not set",
@@ -41,9 +51,10 @@ inboundDNSQueue = 1
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "trafficQueue" must be set`,
+			expectedErr:    `filter "foo": "trafficQueue" must be set`,
 		},
 		{
 			testName: "dnsQueue and trafficQueue same",
@@ -51,10 +62,11 @@ dnsQueue = 1000`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1000`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "dnsQueue" and "trafficQueue" must be different`,
+			expectedErr:    `filter "foo": "dnsQueue" and "trafficQueue" must be different`,
 		},
 		{
 			testName: "inboundDNSQueue and selfDNSQueue same",
@@ -63,6 +75,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 lookupUnknownIPs = true
@@ -78,11 +91,12 @@ allowedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 allowAllHostnames = true`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "trafficQueue" must not be set when "allowAllHostnames" is true`,
+			expectedErr:    `filter "foo": "trafficQueue" must not be set when "allowAllHostnames" is true`,
 		},
 		{
 			testName: "allowedHostnames empty",
@@ -90,10 +104,11 @@ allowAllHostnames = true`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "allowedHostnames" must not be empty`,
+			expectedErr:    `filter "foo": "allowedHostnames" must not be empty`,
 		},
 		{
 			testName: "allowedHostnames not empty and allowAllHostnames is set",
@@ -101,11 +116,12 @@ trafficQueue = 1001`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 allowAllHostnames = true
 allowedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "allowedHostnames" must be empty when "allowAllHostnames" is true`,
+			expectedErr:    `filter "foo": "allowedHostnames" must be empty when "allowAllHostnames" is true`,
 		},
 		{
 			testName: "allowedHostnames not empty and allowAnswersFor is not set",
@@ -113,11 +129,12 @@ allowedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 allowedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "allowAnswersFor" must be set when "allowedHostnames" is not empty`,
+			expectedErr:    `filter "foo": "allowAnswersFor" must be set when "allowedHostnames" is not empty`,
 		},
 		{
 			testName: "allowAllHostnames set and allowAnswersFor is set",
@@ -125,11 +142,12 @@ allowedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 allowAnswersFor = "5s"
 allowAllHostnames = true`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "allowAnswersFor" must not be set when "allowAllHostnames" is true`,
+			expectedErr:    `filter "foo": "allowAnswersFor" must not be set when "allowAllHostnames" is true`,
 		},
 		{
 			testName: "cachedHostnames not empty and allowAllHostnames is set",
@@ -137,11 +155,12 @@ allowAllHostnames = true`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 allowAllHostnames = true
 cachedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "cachedHostnames" must be empty when "allowAllHostnames" is true`,
+			expectedErr:    `filter "foo": "cachedHostnames" must be empty when "allowAllHostnames" is true`,
 		},
 		{
 			testName: "cachedHostnames not empty and reCacheEvery is not set",
@@ -149,11 +168,12 @@ cachedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 cachedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "reCacheEvery" must be set when "cachedHostnames" is not empty`,
+			expectedErr:    `filter "foo": "reCacheEvery" must be set when "cachedHostnames" is not empty`,
 		},
 		{
 			testName: "cachedHostnames empty and reCacheEvery is set",
@@ -161,13 +181,14 @@ cachedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 reCacheEvery = "1s"
 allowAnswersFor = "5s"
 allowedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "reCacheEvery" must not be set when "cachedHostnames" is empty`,
+			expectedErr:    `filter "foo": "reCacheEvery" must not be set when "cachedHostnames" is empty`,
 		},
 		{
 			testName: "dnsQueue set and cachedHostnames not empty",
@@ -176,12 +197,13 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 reCacheEvery = "1s"
 cachedHostnames = ["foo"]`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
+			expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
 		},
 		{
 			testName: "dnsQueue and lookupUnknownIPs set",
@@ -190,11 +212,12 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 lookupUnknownIPs = true`,
 			expectedConfig: nil,
-			expectedErr:    `filter #0: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
+			expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
 		},
 		{
 			testName: "selfDNSQueue set",
@@ -203,6 +226,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 allowAnswersFor = "10s"
@@ -216,12 +240,14 @@ allowedHostnames = ["foo"]`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 allowAllHostnames = true`,
 			expectedConfig: &Config{
 				InboundDNSQueue: 1,
 				Filters: []FilterOptions{
 					{
+						Name:              "foo",
 						DNSQueue:          1000,
 						AllowAllHostnames: true,
 					},
@@ -235,6 +261,7 @@ allowAllHostnames = true`,
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 allowAnswersFor = "5s"
@@ -247,6 +274,7 @@ allowedHostnames = [
 				InboundDNSQueue: 1,
 				Filters: []FilterOptions{
 					{
+						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
 						AllowAnswersFor: 5 * time.Second,
@@ -266,6 +294,7 @@ allowedHostnames = [
 inboundDNSQueue = 1
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 allowAnswersFor = "5s"
@@ -276,12 +305,14 @@ allowedHostnames = [
 ]
 
 [[filters]]
+name = "bar"
 dnsQueue = 2000
 allowAllHostnames = true`,
 			expectedConfig: &Config{
 				InboundDNSQueue: 1,
 				Filters: []FilterOptions{
 					{
+						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
 						AllowAnswersFor: 5 * time.Second,
@@ -292,6 +323,7 @@ allowAllHostnames = true`,
 						},
 					},
 					{
+						Name:              "bar",
 						DNSQueue:          2000,
 						AllowAllHostnames: true,
 					},
@@ -306,6 +338,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 trafficQueue = 1001
 reCacheEvery = "1s"
 cachedHostnames = [
@@ -317,6 +350,7 @@ cachedHostnames = [
 				SelfDNSQueue:    100,
 				Filters: []FilterOptions{
 					{
+						Name:     selfFilterName,
 						DNSQueue: 100,
 						AllowedHostnames: []string{
 							"oof",
@@ -324,6 +358,7 @@ cachedHostnames = [
 						},
 					},
 					{
+						Name:         "foo",
 						TrafficQueue: 1001,
 						ReCacheEvery: time.Second,
 						CachedHostnames: []string{
@@ -342,6 +377,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 trafficQueue = 1001
 lookupUnknownIPs = true`,
 			expectedConfig: &Config{
@@ -349,6 +385,7 @@ lookupUnknownIPs = true`,
 				SelfDNSQueue:    100,
 				Filters: []FilterOptions{
 					{
+						Name:     selfFilterName,
 						DNSQueue: 100,
 						AllowedHostnames: []string{
 							"in-addr.arpa",
@@ -356,6 +393,7 @@ lookupUnknownIPs = true`,
 						},
 					},
 					{
+						Name:             "foo",
 						TrafficQueue:     1001,
 						LookupUnknownIPs: true,
 					},
@@ -370,6 +408,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 reCacheEvery = "1s"
@@ -388,6 +427,7 @@ allowedHostnames = [
 				SelfDNSQueue:    100,
 				Filters: []FilterOptions{
 					{
+						Name:     selfFilterName,
 						DNSQueue: 100,
 						AllowedHostnames: []string{
 							"oof",
@@ -395,6 +435,7 @@ allowedHostnames = [
 						},
 					},
 					{
+						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
 						ReCacheEvery:    time.Second,
@@ -420,6 +461,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 lookupUnknownIPs = true
@@ -434,6 +476,7 @@ allowedHostnames = [
 				SelfDNSQueue:    100,
 				Filters: []FilterOptions{
 					{
+						Name:     selfFilterName,
 						DNSQueue: 100,
 						AllowedHostnames: []string{
 							"in-addr.arpa",
@@ -441,6 +484,7 @@ allowedHostnames = [
 						},
 					},
 					{
+						Name:             "foo",
 						DNSQueue:         1000,
 						TrafficQueue:     1001,
 						LookupUnknownIPs: true,
@@ -462,6 +506,7 @@ inboundDNSQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
+name = "foo"
 dnsQueue = 1000
 trafficQueue = 1001
 lookupUnknownIPs = true
@@ -481,6 +526,7 @@ allowedHostnames = [
 				SelfDNSQueue:    100,
 				Filters: []FilterOptions{
 					{
+						Name:     selfFilterName,
 						DNSQueue: 100,
 						AllowedHostnames: []string{
 							"in-addr.arpa",
@@ -490,6 +536,7 @@ allowedHostnames = [
 						},
 					},
 					{
+						Name:             "foo",
 						DNSQueue:         1000,
 						TrafficQueue:     1001,
 						LookupUnknownIPs: true,
