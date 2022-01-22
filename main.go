@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -15,12 +16,14 @@ var (
 	configPath string
 	debug      bool
 	logPath    string
+	testConfig bool
 )
 
 func init() {
 	flag.StringVar(&configPath, "c", "egress-eddie.toml", "path of the config file")
 	flag.BoolVar(&debug, "d", false, "enable debug logging")
 	flag.StringVar(&logPath, "l", "egress-eddie.log", "path to log to")
+	flag.BoolVar(&testConfig, "t", false, "validate the config and exit")
 }
 
 func main() {
@@ -41,6 +44,13 @@ func main() {
 	}
 
 	config, err := ParseConfig(configPath)
+	if testConfig {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error parsing config: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if err != nil {
 		logger.Fatal("error parsing config", zap.NamedError("error", err))
 	}
