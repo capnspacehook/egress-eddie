@@ -106,6 +106,7 @@ var allowedSyscalls = seccomp.SyscallRules{
 	unix.SYS_MUNMAP:     {},
 	unix.SYS_NANOSLEEP:  {},
 	unix.SYS_NEWFSTATAT: {},
+	unix.SYS_READ:       {},
 	unix.SYS_RECVMSG: {
 		{
 			seccomp.MatchAny{},
@@ -139,6 +140,9 @@ var allowedSyscalls = seccomp.SyscallRules{
 }
 
 var networkSyscalls = seccomp.SyscallRules{
+	unix.SYS_CONNECT:     {},
+	unix.SYS_GETPEERNAME: {},
+	unix.SYS_GETSOCKNAME: {},
 	unix.SYS_OPENAT: {
 		{
 			seccomp.MatchAny{},
@@ -146,10 +150,6 @@ var networkSyscalls = seccomp.SyscallRules{
 			seccomp.EqualTo(unix.O_RDONLY | unix.O_CLOEXEC),
 		},
 	},
-	unix.SYS_READ:        {},
-	unix.SYS_CONNECT:     {},
-	unix.SYS_GETPEERNAME: {},
-	unix.SYS_GETSOCKNAME: {},
 	unix.SYS_SETSOCKOPT: {
 		{
 			seccomp.MatchAny{},
