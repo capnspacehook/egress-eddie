@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/florianl/go-nfqueue"
@@ -30,6 +31,9 @@ const (
 )
 
 type FilterManager struct {
+	stopping int32
+	wg       sync.WaitGroup
+
 	queueNum uint16
 	ipv6     bool
 
@@ -41,7 +45,8 @@ type FilterManager struct {
 }
 
 type filter struct {
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
+	stopping int32
 
 	opts *FilterOptions
 
@@ -109,9 +114,10 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 func (f *FilterManager) Stop() {
 	for i := range f.filters {
 		f.filters[i].close()
-		f.filters[i].wg.Wait()
 	}
 
+	atomic.StoreInt32(&f.stopping, 1)
+	f.wg.Wait()
 	f.dnsRespNF.Close()
 }
 
@@ -231,11 +237,22 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 }
 
 func (f *filter) close() {
+	atomic.StoreInt32(&f.stopping, 1)
+	f.wg.Wait()
+
 	if f.dnsReqNF != nil {
 		f.dnsReqNF.Close()
 	}
 	if f.genericNF != nil {
 		f.genericNF.Close()
+	}
+
+	f.connections.Stop()
+	if f.allowedIPs != nil {
+		f.allowedIPs.Stop()
+	}
+	if f.additionalHostnames != nil {
+		f.additionalHostnames.Stop()
 	}
 }
 
@@ -245,6 +262,12 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		f.wg.Add(1)
+		defer f.wg.Done()
+		if atomic.LoadInt32(&f.stopping) != 0 {
+			return 1
+		}
+
 		if attr.PacketID == nil {
 			return 0
 		}
@@ -426,6 +449,12 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		f.wg.Add(1)
+		defer f.wg.Done()
+		if atomic.LoadInt32(&f.stopping) != 0 {
+			return 1
+		}
+
 		if attr.PacketID == nil {
 			return 0
 		}
@@ -541,6 +570,12 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		f.wg.Add(1)
+		defer f.wg.Done()
+		if atomic.LoadInt32(&f.stopping) != 0 {
+			return 1
+		}
+
 		if attr.PacketID == nil {
 			return 0
 		}
