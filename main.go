@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
@@ -30,43 +31,6 @@ func init() {
 
 func main() {
 	flag.Parse()
-
-	// Ensure the config and log files exist and we have permissions
-	// to access them. This will also be done by landlock below, but
-	// by manually checking and logging upon failure here, the error
-	// message will be more clear.
-	if _, err := os.Stat(configPath); err != nil {
-		log.Fatalf("could not open config file: %v", err)
-	}
-
-	var logNormalFile bool
-	if logPath != "stdout" && logPath != "stderr" {
-		logNormalFile = true
-
-		if _, err := os.Stat(logPath); err != nil {
-			log.Fatalf("could not open log file: %v", err)
-		}
-	}
-
-	// Try and apply landlock rules, preventing access to non-essential
-	// files. Only recent versions of the kernel support landlock (5.13+),
-	// but the landlock library will continue without error if the kernel
-	// does not support it.
-	allowedPaths := []landlock.PathOpt{
-		landlock.PathAccess(llsyscall.AccessFSReadFile, configPath),
-	}
-	if logNormalFile {
-		allowedPaths = append(allowedPaths,
-			landlock.PathAccess(llsyscall.AccessFSWriteFile, logPath),
-		)
-	}
-
-	err := landlock.V1.BestEffort().RestrictPaths(
-		allowedPaths...,
-	)
-	if err != nil {
-		log.Fatalf("error creating landlock rules: %v", err)
-	}
 
 	logCfg := zap.NewProductionConfig()
 	logCfg.OutputPaths = []string{logPath}
@@ -92,6 +56,31 @@ func main() {
 	}
 	if err != nil {
 		logger.Fatal("error parsing config", zap.NamedError("error", err))
+	}
+
+	// Try and apply landlock rules, preventing access to non-essential
+	// files. Only recent versions of the kernel support landlock (5.13+),
+	// but we will ignroe errors if the kernel itself does not support it.
+	// These rules can only apply when egress-eddie does not need to make
+	// network connections, as currently it seems landlock does not support
+	// networking.
+	if config.SelfDNSQueue == 0 {
+		var allowedPaths []landlock.PathOpt
+		if logPath != "stdout" && logPath != "stderr" {
+			allowedPaths = []landlock.PathOpt{
+				landlock.PathAccess(llsyscall.AccessFSWriteFile, logPath),
+			}
+		}
+
+		err = landlock.V1.RestrictPaths(
+			allowedPaths...,
+		)
+		if err != nil {
+			if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
+				logger.Fatal("error creating landlock rules", zap.NamedError("error", err))
+			}
+		}
+		logger.Info("applied landlock rules")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
