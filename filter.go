@@ -149,7 +149,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			go func() {
 				defer f.wg.Done()
 
-				f.cacheHostnames(ctx, filterLogger)
+				f.cacheHostnames(ctx, filterLogger, opts.IPv6)
 			}()
 		}
 	}
@@ -193,26 +193,31 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 	return nf, nil
 }
 
-func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
+func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bool) {
 	logger.Debug("starting cache loop")
 
 	var (
-		ttl   = f.opts.ReCacheEvery + time.Minute
-		res   = new(net.Resolver)
-		timer = time.NewTimer(f.opts.ReCacheEvery)
+		network = "ip4"
+		res     = new(net.Resolver)
+		ttl     = f.opts.ReCacheEvery + time.Minute
+		timer   = time.NewTimer(f.opts.ReCacheEvery)
 	)
+
+	if ipv6 {
+		network = "ip6"
+	}
 
 	for {
 		for i := range f.opts.CachedHostnames {
 			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
-			addrs, err := res.LookupNetIP(ctx, "ip", f.opts.CachedHostnames[i])
+			addrs, err := res.LookupNetIP(ctx, network, f.opts.CachedHostnames[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
 					continue
 				}
-				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
+				logger.Fatal("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
 				continue
 			}
 

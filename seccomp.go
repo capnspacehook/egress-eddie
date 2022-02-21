@@ -158,6 +158,13 @@ var networkSyscalls = seccomp.SyscallRules{
 			seccomp.MatchAny{},
 			seccomp.EqualTo(4),
 		},
+		{
+			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.SOL_IPV6),
+			seccomp.EqualTo(unix.IPV6_V6ONLY),
+			seccomp.MatchAny{},
+			seccomp.EqualTo(4),
+		},
 	},
 	unix.SYS_SOCKET: {
 		{
