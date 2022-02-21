@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/landlock-lsm/go-landlock/landlock"
+	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -28,6 +30,43 @@ func init() {
 
 func main() {
 	flag.Parse()
+
+	// Ensure the config and log files exist and we have permissions
+	// to access them. This will also be done by landlock below, but
+	// by manually checking and logging upon failure here, the error
+	// message will be more clear.
+	if _, err := os.Stat(configPath); err != nil {
+		log.Fatalf("could not open config file: %v", err)
+	}
+
+	var logNormalFile bool
+	if logPath != "stdout" && logPath != "stderr" {
+		logNormalFile = true
+
+		if _, err := os.Stat(logPath); err != nil {
+			log.Fatalf("could not open log file: %v", err)
+		}
+	}
+
+	// Try and apply landlock rules, preventing access to non-essential
+	// files. Only recent versions of the kernel support landlock (5.13+),
+	// but the landlock library will continue without error if the kernel
+	// does not support it.
+	allowedPaths := []landlock.PathOpt{
+		landlock.PathAccess(llsyscall.AccessFSReadFile, configPath),
+	}
+	if logNormalFile {
+		allowedPaths = append(allowedPaths,
+			landlock.PathAccess(llsyscall.AccessFSWriteFile, logPath),
+		)
+	}
+
+	err := landlock.V1.BestEffort().RestrictPaths(
+		allowedPaths...,
+	)
+	if err != nil {
+		log.Fatalf("error creating landlock rules: %v", err)
+	}
 
 	logCfg := zap.NewProductionConfig()
 	logCfg.OutputPaths = []string{logPath}
@@ -69,6 +108,10 @@ func main() {
 		filters.Stop()
 	}()
 
+	// Install seccomp filters to severely limit what egress-eddie is
+	// allowed to do. The landlock rules plus the seccomp filters
+	// will hopefully make it extremely difficult for an attacker to do
+	// anything of value from the context of an egress-eddie process.
 	numAllowedSyscalls, err := installSeccompFilters(logger, config.SelfDNSQueue != 0)
 	if err != nil {
 		logger.Error("error setting seccomp rules", zap.NamedError("error", err))

@@ -6,6 +6,7 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/florianl/go-nfqueue v1.3.0
 	github.com/google/gopacket v1.1.19
+	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
 	github.com/matryer/is v1.4.0
 	github.com/mdlayher/netlink v1.5.0
 	github.com/pelletier/go-toml v1.9.4
@@ -29,4 +30,5 @@ require (
 	golang.org/x/tools v0.1.8 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	honnef.co/go/tools v0.2.2 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.51 // indirect
 )
