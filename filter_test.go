@@ -34,9 +34,10 @@ allowedHostnames = [
 		t,
 		configStr,
 		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queue-num 1000",
-		"-A OUTPUT -p tcp --dport 443 -m owner --uid-owner root -m state --state NEW -j NFQUEUE --queue-num 1001",
+		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
+		"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1001",
 	)
+	defer stop()
 
 	is := is.New(t)
 
@@ -72,8 +73,6 @@ allowedHostnames = [
 
 	_, err = client.Get("https://" + addrs[0])
 	reqTimedOut(is, err) // request to expired IP should timeout
-
-	stop()
 }
 
 func TestAllowAll(t *testing.T) {
@@ -91,16 +90,15 @@ allowAllHostnames = true`
 		t,
 		configStr,
 		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queue-num 1000",
+		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
 	)
+	defer stop()
 
 	is := is.New(t)
 
 	resp, err := client.Get("https://harmony.shinesparkers.net")
 	is.NoErr(err) // request to hostname should succeed
 	resp.Body.Close()
-
-	stop()
 }
 
 func TestCaching(t *testing.T) {
@@ -127,9 +125,10 @@ cachedHostnames = [
 		t,
 		configStr,
 		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queue-num 100",
-		"-A OUTPUT -p tcp --dport 80 -m owner --uid-owner root -m state --state NEW -j NFQUEUE --queue-num 1001",
+		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
+		"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
 	)
+	defer stop()
 
 	// wait until hostnames responses are cached by filters
 	time.Sleep(3 * time.Second)
@@ -144,8 +143,6 @@ cachedHostnames = [
 		is.NoErr(err) // request to IP of cached hostname should succeed
 		resp.Body.Close()
 	}
-
-	stop()
 }
 
 func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http.Client, func()) {
