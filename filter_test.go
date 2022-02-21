@@ -143,6 +143,9 @@ cachedHostnames = [
 		is.NoErr(err) // request to IP of cached hostname should succeed
 		resp.Body.Close()
 	}
+
+	_, err = net.LookupIP("microsoft.com")
+	reqTimedOut(is, err) // lookup of disallowed domain should timeout
 }
 
 func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http.Client, func()) {

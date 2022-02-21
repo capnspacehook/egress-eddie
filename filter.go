@@ -431,6 +431,12 @@ func (f *filter) hostnameAllowed(hostname string) bool {
 		}
 	}
 
+	// the self-filter doesn't have a nfqueue for generic traffic, and
+	// therefore won't have a cache for additional hostnames
+	if f.isSelfFilter {
+		return false
+	}
+
 	return f.additionalHostnames.EntryExists(hostname)
 }
 
