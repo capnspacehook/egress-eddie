@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -52,13 +54,13 @@ allowedHostnames = [
 	resp.Body.Close()
 
 	_, err = client.Get("https://microsoft.com")
-	reqTimedOut(is, err) // request to disallowed hostname should timeout
+	is.True(reqFailed(err)) // request to disallowed hostname should fail
 
 	_, err = client.Get("https://ggoogle.com")
-	reqTimedOut(is, err) // test subdomain matching works correctly
+	is.True(reqFailed(err)) // test subdomain matching works correctly
 
 	_, err = client.Get("https://1.1.1.1")
-	reqTimedOut(is, err) // request to IP of disallowed hostname should timeout
+	is.True(reqFailed(err)) // request to IP of disallowed hostname should fail
 
 	addrs, err := net.LookupHost("google.com")
 	is.NoErr(err) // lookup of allowed hostname should succeed
@@ -66,7 +68,7 @@ allowedHostnames = [
 	time.Sleep(4 * time.Second) // wait until IPs should expire
 
 	_, err = client.Get("https://" + addrs[0])
-	reqTimedOut(is, err) // request to expired IP should timeout
+	is.True(reqFailed(err)) // request to expired IP should fail
 }
 
 func TestAllowAll(t *testing.T) {
@@ -112,7 +114,7 @@ cachedHostnames = [
 
 	is := is.New(t)
 
-	addrs, err := net.LookupIP("digitalocean.com")
+	addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "digitalocean.com")
 	is.NoErr(err)
 
 	client, stop := initFilters(
@@ -129,9 +131,7 @@ cachedHostnames = [
 
 	for _, addr := range addrs {
 		// skip IPv6 addresses, causes an error when preforming a GET request
-		if addr.To4() == nil {
-			continue
-		}
+		addr = addr.Unmap()
 
 		resp, err := client.Get("http://" + addr.String())
 		is.NoErr(err) // request to IP of cached hostname should succeed
@@ -139,13 +139,18 @@ cachedHostnames = [
 	}
 
 	_, err = net.LookupIP("microsoft.com")
-	reqTimedOut(is, err) // lookup of disallowed domain should timeout
+	is.True(reqFailed(err)) // lookup of disallowed domain should fail
 }
 
-func reqTimedOut(is *is.I, err error) {
-	timeoutErr, ok := err.(interface{ Timeout() bool })
-	is.True(ok)
-	if ok {
-		is.True(timeoutErr.Timeout())
+func reqFailed(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
 	}
+
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+
+	return false
 }
