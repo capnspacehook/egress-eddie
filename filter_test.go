@@ -1,17 +1,11 @@
 package main
 
 import (
-	"context"
 	"net"
-	"net/http"
-	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/anmitsu/go-shlex"
 	"github.com/matryer/is"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func TestFiltering(t *testing.T) {
@@ -146,65 +140,6 @@ cachedHostnames = [
 
 	_, err = net.LookupIP("microsoft.com")
 	reqTimedOut(is, err) // lookup of disallowed domain should timeout
-}
-
-func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http.Client, func()) {
-	config, err := parseConfigBytes([]byte(configStr))
-	if err != nil {
-		t.Fatalf("error parsing config: %v", err)
-	}
-
-	iptablesCmd(t, "-F")
-	for _, command := range iptablesRules {
-		iptablesCmd(t, command)
-	}
-
-	logCfg := zap.NewProductionConfig()
-	logCfg.OutputPaths = []string{"stderr"}
-	logCfg.Level.SetLevel(zap.DebugLevel)
-	logCfg.EncoderConfig.TimeKey = "time"
-	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	logCfg.DisableCaller = true
-
-	logger, err := logCfg.Build()
-	if err != nil {
-		t.Fatalf("error creating logger: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	filters, err := StartFilters(ctx, logger, config)
-	if err != nil {
-		t.Fatalf("error starting filters: %v", err)
-	}
-
-	tp := &http.Transport{
-		MaxIdleConns:      1,
-		DisableKeepAlives: true,
-	}
-	client := &http.Client{
-		Transport: tp,
-		Timeout:   3 * time.Second,
-	}
-
-	stop := func() {
-		cancel()
-		filters.Stop()
-		iptablesCmd(t, "-F")
-	}
-
-	return client, stop
-}
-
-func iptablesCmd(t *testing.T, args string) {
-	splitArgs, err := shlex.Split(args, true)
-	if err != nil {
-		t.Fatalf("error spitting command %v: %v", args, err)
-	}
-
-	if err := exec.Command("iptables", splitArgs...).Run(); err != nil {
-		t.Fatalf("error running command %v: %v", args, err)
-	}
 }
 
 func reqTimedOut(is *is.I, err error) {
