@@ -224,8 +224,16 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 			for i := range addrs {
 				logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
 				f.allowedIPs.AddEntry(addrs[i], ttl)
-			}
 
+				// If the IP address is an IPv4-mapped IPv6 address,
+				// add the unwrapped IPv4 address too. That is what
+				// will most likely be used.
+				if addrs[i].Is4In6() {
+					addrs[i] = addrs[i].Unmap()
+					logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
+					f.allowedIPs.AddEntry(addrs[i], ttl)
+				}
+			}
 		}
 
 		timer.Reset(f.opts.ReCacheEvery)
@@ -546,21 +554,18 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 
 						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Duration("answer.ttl", ttl))
-
 						connFilter.allowedIPs.AddEntry(ip, ttl)
 					} else if answer.Type == layers.DNSTypeCNAME {
 						// temporarily add CNAME answers to allowed
 						// hostnames list
 						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
-
 						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), ttl)
 					} else if answer.Type == layers.DNSTypeSRV {
 						// temporarily add SRV answers to allowed
 						// hostnames list
 						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
-
 						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), ttl)
 					}
 				}
