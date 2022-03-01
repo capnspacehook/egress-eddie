@@ -67,7 +67,7 @@ allowedHostnames = [
 
 	time.Sleep(4 * time.Second) // wait until IPs should expire
 
-	_, err = client.Get("https://" + addrs[0].String())
+	_, err = client.Get("https://" + addrs[0].Unmap().String())
 	is.True(reqFailed(err)) // request to expired IP should fail
 }
 
