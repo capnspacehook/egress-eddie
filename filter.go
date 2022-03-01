@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/florianl/go-nfqueue"
@@ -31,8 +30,7 @@ const (
 )
 
 type FilterManager struct {
-	stopping int32
-	wg       sync.WaitGroup
+	ready chan struct{}
 
 	queueNum uint16
 	ipv6     bool
@@ -45,8 +43,9 @@ type FilterManager struct {
 }
 
 type filter struct {
-	wg       sync.WaitGroup
-	stopping int32
+	dnsReqNFReady  chan struct{}
+	genericNFReady chan struct{}
+	wg             sync.WaitGroup
 
 	opts *FilterOptions
 
@@ -86,6 +85,7 @@ func (c connectionID) String() string {
 
 func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
 	f := FilterManager{
+		ready:    make(chan struct{}),
 		queueNum: config.InboundDNSQueue,
 		ipv6:     config.IPv6,
 		logger:   logger,
@@ -108,17 +108,29 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		f.filters[i] = filter
 	}
 
+	// Let the DNS response callback know everything is setup. The
+	// callback will be executing on another goroutine started by
+	// nfqueue.RegisterWithErrorFunc, but only after a packet is
+	// received on its nfqueue. We send in a goroutine here to avoid
+	// blocking until a packet is received so seccomp filters can be
+	// applied ASAP.
+	go func() {
+		f.ready <- struct{}{}
+		// Close the channel after the callback has received the
+		// message. This will ensure the callback will not block
+		// on a channel receive when called again.
+		close(f.ready)
+	}()
+
 	return &f, nil
 }
 
 func (f *FilterManager) Stop() {
+	f.dnsRespNF.Close()
+
 	for i := range f.filters {
 		f.filters[i].close()
 	}
-
-	atomic.StoreInt32(&f.stopping, 1)
-	f.wg.Wait()
-	f.dnsRespNF.Close()
 }
 
 func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool) (*filter, error) {
@@ -128,10 +140,12 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 	}
 
 	f := filter{
-		opts:         opts,
-		logger:       filterLogger,
-		connections:  NewTimedCache[connectionID](logger, true),
-		isSelfFilter: isSelfFilter,
+		dnsReqNFReady:  make(chan struct{}),
+		genericNFReady: make(chan struct{}),
+		opts:           opts,
+		logger:         filterLogger,
+		connections:    NewTimedCache[connectionID](logger, true),
+		isSelfFilter:   isSelfFilter,
 	}
 
 	if opts.TrafficQueue != 0 {
@@ -143,6 +157,12 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
 		}
 		f.genericNF = genericNF
+		// let the generic packet callback know everything is setup;
+		// for more info see the comment in StartFilters above
+		go func() {
+			f.genericNFReady <- struct{}{}
+			close(f.genericNFReady)
+		}()
 
 		if len(f.opts.CachedHostnames) > 0 {
 			f.wg.Add(1)
@@ -160,6 +180,12 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
 		}
 		f.dnsReqNF = dnsNF
+		// let the DNS request callback know everything is setup;
+		// for more info see the comment in StartFilters above
+		go func() {
+			f.dnsReqNFReady <- struct{}{}
+			close(f.dnsReqNFReady)
+		}()
 	}
 
 	return &f, nil
@@ -250,7 +276,6 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 }
 
 func (f *filter) close() {
-	atomic.StoreInt32(&f.stopping, 1)
 	f.wg.Wait()
 
 	if f.dnsReqNF != nil {
@@ -275,11 +300,8 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
-		f.wg.Add(1)
-		defer f.wg.Done()
-		if atomic.LoadInt32(&f.stopping) != 0 {
-			return 1
-		}
+		// wait until the filter is setup to prevent race conditions
+		<-f.dnsReqNFReady
 
 		if attr.PacketID == nil {
 			return 0
@@ -468,11 +490,8 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
-		f.wg.Add(1)
-		defer f.wg.Done()
-		if atomic.LoadInt32(&f.stopping) != 0 {
-			return 1
-		}
+		// wait until the filter manager is setup to prevent race conditions
+		<-f.ready
 
 		if attr.PacketID == nil {
 			return 0
@@ -586,11 +605,8 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
-		f.wg.Add(1)
-		defer f.wg.Done()
-		if atomic.LoadInt32(&f.stopping) != 0 {
-			return 1
-		}
+		// wait until the filter is setup to prevent race conditions
+		<-f.genericNFReady
 
 		if attr.PacketID == nil {
 			return 0
