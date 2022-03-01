@@ -62,12 +62,12 @@ allowedHostnames = [
 	_, err = client.Get("https://1.1.1.1")
 	is.True(reqFailed(err)) // request to IP of disallowed hostname should fail
 
-	addrs, err := net.LookupHost("google.com")
+	addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "google.com")
 	is.NoErr(err) // lookup of allowed hostname should succeed
 
 	time.Sleep(4 * time.Second) // wait until IPs should expire
 
-	_, err = client.Get("https://" + addrs[0])
+	_, err = client.Get("https://" + addrs[0].String())
 	is.True(reqFailed(err)) // request to expired IP should fail
 }
 
@@ -113,8 +113,10 @@ cachedHostnames = [
 ]`
 
 	is := is.New(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 
-	addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "digitalocean.com")
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", "digitalocean.com")
 	is.NoErr(err)
 
 	client, stop := initFilters(
@@ -138,7 +140,7 @@ cachedHostnames = [
 		resp.Body.Close()
 	}
 
-	_, err = net.LookupIP("microsoft.com")
+	_, err = net.DefaultResolver.LookupNetIP(ctx, "ip4", "microsoft.com")
 	is.True(reqFailed(err)) // lookup of disallowed domain should fail
 }
 
