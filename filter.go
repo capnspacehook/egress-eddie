@@ -102,6 +102,7 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
 		filter, err := startFilter(ctx, logger, &config.Filters[i], isSelfFilter)
 		if err != nil {
+			// TODO: stop other filters here
 			return nil, err
 		}
 
@@ -225,8 +226,8 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 	var (
 		network = "ip4"
 		res     = new(net.Resolver)
-		ttl     = f.opts.ReCacheEvery + time.Minute
-		timer   = time.NewTimer(f.opts.ReCacheEvery)
+		ttl     = time.Duration(f.opts.ReCacheEvery) + time.Minute
+		timer   = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
 	)
 
 	if ipv6 {
@@ -262,7 +263,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 			}
 		}
 
-		timer.Reset(f.opts.ReCacheEvery)
+		timer.Reset(time.Duration(f.opts.ReCacheEvery))
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -561,6 +562,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			// don't process the DNS response if the filter it came
 			// from is the self filter
 			if !connFilter.isSelfFilter && dns.ANCount > 0 {
+				ttl := time.Duration(connFilter.opts.AllowAnswersFor)
 				for _, answer := range dns.Answers {
 					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
 						// temporarily add A and AAAA answers to
@@ -571,19 +573,16 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 							continue
 						}
 
-						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Duration("answer.ttl", ttl))
 						connFilter.allowedIPs.AddEntry(ip, ttl)
 					} else if answer.Type == layers.DNSTypeCNAME {
 						// temporarily add CNAME answers to allowed
 						// hostnames list
-						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
 						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), ttl)
 					} else if answer.Type == layers.DNSTypeSRV {
 						// temporarily add SRV answers to allowed
 						// hostnames list
-						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
 						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), ttl)
 					}
@@ -730,6 +729,7 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, e
 		return false, err
 	}
 
+	ttl := time.Duration(f.opts.AllowAnswersFor)
 	for i := range names {
 		// remove trailing dot if necessary before searching through
 		// allowed hostnames
@@ -738,7 +738,6 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, e
 		}
 
 		if f.hostnameAllowed(names[i]) {
-			ttl := f.opts.AllowAnswersFor
 			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip), zap.Duration("ttl", ttl))
 			f.allowedIPs.AddEntry(ip, ttl)
 			return true, nil
