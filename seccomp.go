@@ -119,9 +119,11 @@ var allowedSyscalls = seccomp.SyscallRules{
 			seccomp.EqualTo(unix.MSG_PEEK),
 		},
 	},
-	unix.SYS_RT_SIGPROCMASK: {},
-	unix.SYS_RT_SIGRETURN:   {},
-	unix.SYS_SCHED_YIELD:    {},
+	unix.SYS_RESTART_SYSCALL: {},
+	unix.SYS_RT_SIGACTION:    {},
+	unix.SYS_RT_SIGPROCMASK:  {},
+	unix.SYS_RT_SIGRETURN:    {},
+	unix.SYS_SCHED_YIELD:     {},
 	unix.SYS_SENDMSG: {
 		{
 			seccomp.MatchAny{},
