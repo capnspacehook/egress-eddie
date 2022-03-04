@@ -343,7 +343,7 @@ allowedHostnames = [
 						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
-						AllowAnswersFor: 5 * time.Second,
+						AllowAnswersFor: duration(5 * time.Second),
 						AllowedHostnames: []string{
 							"foo",
 							"bar",
@@ -381,7 +381,7 @@ allowAllHostnames = true`,
 						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
-						AllowAnswersFor: 5 * time.Second,
+						AllowAnswersFor: duration(5 * time.Second),
 						AllowedHostnames: []string{
 							"foo",
 							"bar",
@@ -426,7 +426,7 @@ cachedHostnames = [
 					{
 						Name:         "foo",
 						TrafficQueue: 1001,
-						ReCacheEvery: time.Second,
+						ReCacheEvery: duration(time.Second),
 						CachedHostnames: []string{
 							"oof",
 							"rab",
@@ -504,8 +504,8 @@ allowedHostnames = [
 						Name:            "foo",
 						DNSQueue:        1000,
 						TrafficQueue:    1001,
-						ReCacheEvery:    time.Second,
-						AllowAnswersFor: 5 * time.Second,
+						ReCacheEvery:    duration(time.Second),
+						AllowAnswersFor: duration(5 * time.Second),
 						AllowedHostnames: []string{
 							"foo",
 							"bar",
@@ -554,7 +554,7 @@ allowedHostnames = [
 						DNSQueue:         1000,
 						TrafficQueue:     1001,
 						LookupUnknownIPs: true,
-						AllowAnswersFor:  5 * time.Second,
+						AllowAnswersFor:  duration(5 * time.Second),
 						AllowedHostnames: []string{
 							"foo",
 							"bar",
@@ -606,8 +606,8 @@ allowedHostnames = [
 						DNSQueue:         1000,
 						TrafficQueue:     1001,
 						LookupUnknownIPs: true,
-						ReCacheEvery:     time.Second,
-						AllowAnswersFor:  5 * time.Second,
+						ReCacheEvery:     duration(time.Second),
+						AllowAnswersFor:  duration(5 * time.Second),
 						AllowedHostnames: []string{
 							"foo",
 							"bar",
