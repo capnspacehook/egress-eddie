@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"strings"
+	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
 	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
@@ -102,7 +103,7 @@ func main() {
 		logger.Info("applied landlock rules")
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
 	filters, err := StartFilters(ctx, logger, config)
 	if err != nil {
