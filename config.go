@@ -32,7 +32,7 @@ type Config struct {
 
 type FilterOptions struct {
 	Name              string
-	DNSQueue          uint16 `toml:"dnsQueue"`
+	DNSQueue          uint16
 	TrafficQueue      uint16
 	IPv6              bool
 	AllowAllHostnames bool
