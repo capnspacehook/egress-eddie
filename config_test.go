@@ -84,7 +84,6 @@ allowedHostnames = ["foo"]`,
 			expectedConfig: nil,
 			expectedErr:    `"inboundDNSQueue" and "selfDNSQueue" must be different`,
 		},
-		// TODO: test all filters have different queues
 		{
 			testName: "trafficQueue and AllowAllHostnames set",
 			configStr: `
