@@ -4,6 +4,3 @@
 *.out
 *.toml
 *.sh
-
-eddie
-egress-eddie
