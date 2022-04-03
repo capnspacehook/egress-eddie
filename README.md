@@ -1,6 +1,6 @@
 # egress-eddie
 
-Egress Eddie is a simple tool designed to do one thing: filter outbound traffic by hostname.
+Egress Eddie is a simple tool designed to do one thing: filter outbound traffic by hostname on Linux.
 Iptables and nftables both only let you filter by IP address, generally if you want to filter
 by hostname you need a proxy for the specific protocol you're trying to filter. But Egress Eddie
 allows you to filter all TCP and UDP traffic by hostname, regardless of the protocol being used
@@ -38,7 +38,7 @@ IP addresses are inspected to ensure they match IPs returned from accepted DNS a
 
 ## Security
 
-Egress Eddie leverages `seccomp` to ensure that it will only use a handful of syscalls (default 24)
+Egress Eddie leverages `seccomp` to ensure that it will only use a handful of syscalls (default 25)
 with filtered arguments. This makes it very difficult for an attacker to do anything of value if
 they are somehow able to execute code in the context of a running Egress Eddie process.
 
@@ -52,7 +52,7 @@ setcap 'cap_net_admin=+ep' egress-eddie
 
 Special permissions are needed to interface with nfqueue. 
 
-Alternatively, you *could* run Egress Eddie as root, though that is not recommended from a security standpoint.
+Alternatively, you *could* run Egress Eddie as root, though that is **not recommended** from a security standpoint.
 
 ## Installing
 
