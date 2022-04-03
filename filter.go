@@ -212,10 +212,32 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 		return nil, fmt.Errorf("error opening nfqueue: %v", err)
 	}
 
+	// close the nfqueue connection in case of an error
+	var ok bool
+	defer func() {
+		if !ok {
+			nf.Close()
+		}
+	}()
+
+	// Set options to the nfqueue's netlink socket if possible to enable
+	// better error messages and more strict checking of arguments from
+	// the kernel. Ignore ENOPROTOOPT errors, that just means the kernel
+	// doesn't support that option.
+	err = nf.Con.SetOption(netlink.ExtendedAcknowledge, true)
+	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
+		return nil, fmt.Errorf("error setting ExtendedAcknowledge netlink option: %v", err)
+	}
+	err = nf.Con.SetOption(netlink.GetStrictCheck, true)
+	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
+		return nil, fmt.Errorf("error setting GetStrictCheck netlink option: %v", err)
+	}
+
 	if err := nf.RegisterWithErrorFunc(ctx, hook, newErrorCallback(logger)); err != nil {
-		nf.Close()
 		return nil, fmt.Errorf("error registering nfqueue: %v", err)
 	}
+
+	ok = true
 
 	return nf, nil
 }
