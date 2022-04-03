@@ -266,7 +266,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
 					continue
 				}
-				logger.Fatal("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
+				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
 				continue
 			}
 
