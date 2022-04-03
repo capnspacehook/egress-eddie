@@ -6,10 +6,22 @@ import (
 	"os"
 	"time"
 
-	"github.com/pelletier/go-toml"
+	"github.com/BurntSushi/toml"
 )
 
 const selfFilterName = "self-filter"
+
+type duration time.Duration
+
+func (d *duration) UnmarshalText(text []byte) error {
+	dur, err := time.ParseDuration(string(text))
+	if err != nil {
+		return err
+	}
+	*d = duration(dur)
+
+	return nil
+}
 
 type Config struct {
 	InboundDNSQueue uint16
@@ -20,13 +32,13 @@ type Config struct {
 
 type FilterOptions struct {
 	Name              string
-	DNSQueue          uint16 `toml:"dnsQueue"`
+	DNSQueue          uint16
 	TrafficQueue      uint16
 	IPv6              bool
 	AllowAllHostnames bool
 	LookupUnknownIPs  bool
-	AllowAnswersFor   time.Duration
-	ReCacheEvery      time.Duration
+	AllowAnswersFor   duration
+	ReCacheEvery      duration
 	AllowedHostnames  []string
 	CachedHostnames   []string
 }

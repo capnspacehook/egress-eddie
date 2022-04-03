@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +30,8 @@ const (
 )
 
 type FilterManager struct {
+	ready chan struct{}
+
 	queueNum uint16
 	ipv6     bool
 
@@ -41,7 +43,9 @@ type FilterManager struct {
 }
 
 type filter struct {
-	wg sync.WaitGroup
+	dnsReqNFReady  chan struct{}
+	genericNFReady chan struct{}
+	wg             sync.WaitGroup
 
 	opts *FilterOptions
 
@@ -50,17 +54,38 @@ type filter struct {
 	dnsReqNF  *nfqueue.Nfqueue
 	genericNF *nfqueue.Nfqueue
 
-	connections *TimedCache
-	// TODO: replace with net/netaddr when it gets released in the
-	// standard library (1.18?)
-	allowedIPs          *TimedCache
-	additionalHostnames *TimedCache
+	connections         *TimedCache[connectionID]
+	allowedIPs          *TimedCache[netip.Addr]
+	additionalHostnames *TimedCache[string]
 
 	isSelfFilter bool
 }
 
+type connectionID struct {
+	isUDP bool
+	src   netip.AddrPort
+	dst   netip.AddrPort
+}
+
+func (c connectionID) String() string {
+	var b strings.Builder
+
+	if c.isUDP {
+		b.WriteString("udp")
+	} else {
+		b.WriteString("tcp")
+	}
+	b.WriteRune('|')
+	b.WriteString(c.src.String())
+	b.WriteRune('-')
+	b.WriteString(c.dst.String())
+
+	return b.String()
+}
+
 func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
 	f := FilterManager{
+		ready:    make(chan struct{}),
 		queueNum: config.InboundDNSQueue,
 		ipv6:     config.IPv6,
 		logger:   logger,
@@ -77,22 +102,36 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
 		filter, err := startFilter(ctx, logger, &config.Filters[i], isSelfFilter)
 		if err != nil {
+			// TODO: stop other filters here
 			return nil, err
 		}
 
 		f.filters[i] = filter
 	}
 
+	// Let the DNS response callback know everything is setup. The
+	// callback will be executing on another goroutine started by
+	// nfqueue.RegisterWithErrorFunc, but only after a packet is
+	// received on its nfqueue. We send in a goroutine here to avoid
+	// blocking until a packet is received so seccomp filters can be
+	// applied ASAP.
+	go func() {
+		f.ready <- struct{}{}
+		// Close the channel after the callback has received the
+		// message. This will ensure the callback will not block
+		// on a channel receive when called again.
+		close(f.ready)
+	}()
+
 	return &f, nil
 }
 
 func (f *FilterManager) Stop() {
+	f.dnsRespNF.Close()
+
 	for i := range f.filters {
 		f.filters[i].close()
-		f.filters[i].wg.Wait()
 	}
-
-	f.dnsRespNF.Close()
 }
 
 func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool) (*filter, error) {
@@ -102,28 +141,36 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 	}
 
 	f := filter{
-		opts:         opts,
-		logger:       filterLogger,
-		connections:  NewTimedCache(logger, true),
-		isSelfFilter: isSelfFilter,
+		dnsReqNFReady:  make(chan struct{}),
+		genericNFReady: make(chan struct{}),
+		opts:           opts,
+		logger:         filterLogger,
+		connections:    NewTimedCache[connectionID](logger, true),
+		isSelfFilter:   isSelfFilter,
 	}
 
 	if opts.TrafficQueue != 0 {
-		f.allowedIPs = NewTimedCache(f.logger, false)
-		f.additionalHostnames = NewTimedCache(filterLogger, false)
+		f.allowedIPs = NewTimedCache[netip.Addr](f.logger, false)
+		f.additionalHostnames = NewTimedCache[string](filterLogger, false)
 
 		genericNF, err := startNfQueue(ctx, filterLogger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
 		if err != nil {
 			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
 		}
 		f.genericNF = genericNF
+		// let the generic packet callback know everything is setup;
+		// for more info see the comment in StartFilters above
+		go func() {
+			f.genericNFReady <- struct{}{}
+			close(f.genericNFReady)
+		}()
 
 		if len(f.opts.CachedHostnames) > 0 {
 			f.wg.Add(1)
 			go func() {
 				defer f.wg.Done()
 
-				f.cacheHostnames(ctx, filterLogger)
+				f.cacheHostnames(ctx, filterLogger, opts.IPv6)
 			}()
 		}
 	}
@@ -134,6 +181,12 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
 		}
 		f.dnsReqNF = dnsNF
+		// let the DNS request callback know everything is setup;
+		// for more info see the comment in StartFilters above
+		go func() {
+			f.dnsReqNFReady <- struct{}{}
+			close(f.dnsReqNFReady)
+		}()
 	}
 
 	return &f, nil
@@ -159,27 +212,54 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 		return nil, fmt.Errorf("error opening nfqueue: %v", err)
 	}
 
+	// close the nfqueue connection in case of an error
+	var ok bool
+	defer func() {
+		if !ok {
+			nf.Close()
+		}
+	}()
+
+	// Set options to the nfqueue's netlink socket if possible to enable
+	// better error messages and more strict checking of arguments from
+	// the kernel. Ignore ENOPROTOOPT errors, that just means the kernel
+	// doesn't support that option.
+	err = nf.Con.SetOption(netlink.ExtendedAcknowledge, true)
+	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
+		return nil, fmt.Errorf("error setting ExtendedAcknowledge netlink option: %v", err)
+	}
+	err = nf.Con.SetOption(netlink.GetStrictCheck, true)
+	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
+		return nil, fmt.Errorf("error setting GetStrictCheck netlink option: %v", err)
+	}
+
 	if err := nf.RegisterWithErrorFunc(ctx, hook, newErrorCallback(logger)); err != nil {
-		nf.Close()
 		return nil, fmt.Errorf("error registering nfqueue: %v", err)
 	}
+
+	ok = true
 
 	return nf, nil
 }
 
-func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
+func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bool) {
 	logger.Debug("starting cache loop")
 
 	var (
-		ttl   = f.opts.ReCacheEvery + time.Minute
-		res   = new(net.Resolver)
-		timer = time.NewTimer(f.opts.ReCacheEvery)
+		network = "ip4"
+		res     = new(net.Resolver)
+		ttl     = time.Duration(f.opts.ReCacheEvery) + time.Minute
+		timer   = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
 	)
+
+	if ipv6 {
+		network = "ip6"
+	}
 
 	for {
 		for i := range f.opts.CachedHostnames {
 			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
-			addrs, err := res.LookupHost(ctx, f.opts.CachedHostnames[i])
+			addrs, err := res.LookupNetIP(ctx, network, f.opts.CachedHostnames[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
@@ -191,13 +271,21 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 			}
 
 			for i := range addrs {
-				logger.Info("allowing IP from cached lookup", zap.String("ip", addrs[i]), zap.Duration("ttl", ttl))
+				logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
 				f.allowedIPs.AddEntry(addrs[i], ttl)
-			}
 
+				// If the IP address is an IPv4-mapped IPv6 address,
+				// add the unwrapped IPv4 address too. That is what
+				// will most likely be used.
+				if addrs[i].Is4In6() {
+					addrs[i] = addrs[i].Unmap()
+					logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
+					f.allowedIPs.AddEntry(addrs[i], ttl)
+				}
+			}
 		}
 
-		timer.Reset(f.opts.ReCacheEvery)
+		timer.Reset(time.Duration(f.opts.ReCacheEvery))
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -211,11 +299,21 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 }
 
 func (f *filter) close() {
+	f.wg.Wait()
+
 	if f.dnsReqNF != nil {
 		f.dnsReqNF.Close()
 	}
 	if f.genericNF != nil {
 		f.genericNF.Close()
+	}
+
+	f.connections.Stop()
+	if f.allowedIPs != nil {
+		f.allowedIPs.Stop()
+	}
+	if f.additionalHostnames != nil {
+		f.additionalHostnames.Stop()
 	}
 }
 
@@ -225,6 +323,9 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		// wait until the filter is setup to prevent race conditions
+		<-f.dnsReqNFReady
+
 		if attr.PacketID == nil {
 			return 0
 		}
@@ -250,7 +351,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
 		}
-		logger := logger.With(zap.String("conn.id", connID))
+		logger := logger.With(zap.Stringer("conn.id", connID))
 
 		// drop DNS replies, they shouldn't be going to this filter
 		if dns.ANCount > 0 {
@@ -291,7 +392,7 @@ func connIsEstablished(state uint32) bool {
 	return state == state_established || state == state_related || state == state_is_reply || state == state_related_reply
 }
 
-func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, error) {
+func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionID, error) {
 	var (
 		ip4     layers.IPv4
 		ip6     layers.IPv6
@@ -310,58 +411,53 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, string, err
 	}
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
-		return nil, "", err
+		return nil, connectionID{}, err
 	}
 	if len(decoded) != 3 {
-		return nil, "", errors.New("not all layers were parsed")
+		return nil, connectionID{}, errors.New("not all layers were parsed")
 	}
-
-	var (
-		connIDBuilder    strings.Builder
-		connType         string
-		srcIP, dstIP     string
-		srcPort, dstPort string
-	)
 
 	// build connection ID so dns requests/responses can be correlated
+	var (
+		isUDP            bool
+		src, dst         netip.Addr
+		srcPort, dstPort uint16
+		srcOK, dstOK     bool
+	)
+
 	if decoded[0] == layers.LayerTypeIPv4 {
-		srcIP = ip4.SrcIP.String()
-		dstIP = ip4.DstIP.String()
-	} else {
-		srcIP = ip6.SrcIP.String()
-		dstIP = ip6.DstIP.String()
+		src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
+		dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
+	} else if decoded[0] == layers.LayerTypeIPv6 {
+		src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
+		dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
 	}
+	if !srcOK || !dstOK {
+		return nil, connectionID{}, errors.New("error converting IPs")
+	}
+
 	if decoded[1] == layers.LayerTypeUDP {
-		connType = "udp"
-		srcPort = strconv.Itoa(int(udp.SrcPort))
-		dstPort = strconv.Itoa(int(udp.DstPort))
+		isUDP = true
+		srcPort = uint16(udp.SrcPort)
+		dstPort = uint16(udp.DstPort)
 	} else {
-		connType = "tcp"
-		srcPort = strconv.Itoa(int(tcp.SrcPort))
-		dstPort = strconv.Itoa(int(tcp.DstPort))
+		isUDP = false
+		srcPort = uint16(tcp.SrcPort)
+		dstPort = uint16(tcp.DstPort)
 	}
 
-	connIDBuilder.WriteString(connType)
-	connIDBuilder.WriteByte('|')
+	connID := connectionID{
+		isUDP: isUDP,
+	}
 	if inbound {
-		connIDBuilder.WriteString(dstIP)
-		connIDBuilder.WriteByte(':')
-		connIDBuilder.WriteString(dstPort)
-		connIDBuilder.WriteByte('-')
-		connIDBuilder.WriteString(srcIP)
-		connIDBuilder.WriteByte(':')
-		connIDBuilder.WriteString(srcPort)
+		connID.src = netip.AddrPortFrom(dst, dstPort)
+		connID.dst = netip.AddrPortFrom(src, srcPort)
 	} else {
-		connIDBuilder.WriteString(srcIP)
-		connIDBuilder.WriteByte(':')
-		connIDBuilder.WriteString(srcPort)
-		connIDBuilder.WriteByte('-')
-		connIDBuilder.WriteString(dstIP)
-		connIDBuilder.WriteByte(':')
-		connIDBuilder.WriteString(dstPort)
+		connID.src = netip.AddrPortFrom(src, srcPort)
+		connID.dst = netip.AddrPortFrom(dst, dstPort)
 	}
 
-	return &dns, connIDBuilder.String(), nil
+	return &dns, connID, nil
 }
 
 func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool {
@@ -393,6 +489,12 @@ func (f *filter) hostnameAllowed(hostname string) bool {
 		}
 	}
 
+	// the self-filter doesn't have a nfqueue for generic traffic, and
+	// therefore won't have a cache for additional hostnames
+	if f.isSelfFilter {
+		return false
+	}
+
 	return f.additionalHostnames.EntryExists(hostname)
 }
 
@@ -411,6 +513,9 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		// wait until the filter manager is setup to prevent race conditions
+		<-f.ready
+
 		if attr.PacketID == nil {
 			return 0
 		}
@@ -440,7 +545,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
 		}
-		logger := logger.With(zap.String("conn.id", connID))
+		logger := logger.With(zap.Stringer("conn.id", connID))
 
 		var connFilter *filter
 		for _, filter := range f.filters {
@@ -479,28 +584,28 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			// don't process the DNS response if the filter it came
 			// from is the self filter
 			if !connFilter.isSelfFilter && dns.ANCount > 0 {
+				ttl := time.Duration(connFilter.opts.AllowAnswersFor)
 				for _, answer := range dns.Answers {
 					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
 						// temporarily add A and AAAA answers to
 						// allowed IP list
-						ipStr := answer.IP.String()
-						ttl := connFilter.opts.AllowAnswersFor
-						logger.Info("allowing IP from DNS reply", zap.String("answer.ip", ipStr), zap.Duration("answer.ttl", ttl))
+						ip, ok := netip.AddrFromSlice(answer.IP)
+						if !ok {
+							logger.Error("error converting IP", zap.Stringer("answer.ip", answer.IP))
+							continue
+						}
 
-						connFilter.allowedIPs.AddEntry(ipStr, ttl)
+						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Duration("answer.ttl", ttl))
+						connFilter.allowedIPs.AddEntry(ip, ttl)
 					} else if answer.Type == layers.DNSTypeCNAME {
 						// temporarily add CNAME answers to allowed
 						// hostnames list
-						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
-
 						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), ttl)
 					} else if answer.Type == layers.DNSTypeSRV {
 						// temporarily add SRV answers to allowed
 						// hostnames list
-						ttl := connFilter.opts.AllowAnswersFor
 						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
-
 						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), ttl)
 					}
 				}
@@ -521,6 +626,9 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
+		// wait until the filter is setup to prevent race conditions
+		<-f.genericNFReady
+
 		if attr.PacketID == nil {
 			return 0
 		}
@@ -555,34 +663,37 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 
 		// get source and destination IP
 		var (
-			src, dst     string
-			srcIP, dstIP net.IP
+			src, dst     netip.Addr
+			srcOK, dstOK bool
 		)
-
 		if decoded[0] == layers.LayerTypeIPv4 {
-			src = ip4.SrcIP.String()
-			srcIP = ip4.SrcIP
-			dst = ip4.DstIP.String()
-			dstIP = ip4.DstIP
+			src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
+			dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
+			if !srcOK || !dstOK {
+				logger.Error("error converting IPs", zap.Stringer("conn.src", ip4.SrcIP), zap.Stringer("conn.dst", ip4.DstIP))
+				return 0
+			}
 		} else if decoded[0] == layers.LayerTypeIPv6 {
-			src = ip6.SrcIP.String()
-			srcIP = ip6.SrcIP
-			dst = ip6.DstIP.String()
-			dstIP = ip6.DstIP
+			src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
+			dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
+			if !srcOK || !dstOK {
+				logger.Error("error converting IPs", zap.Stringer("conn.src", ip6.SrcIP), zap.Stringer("conn.dst", ip6.DstIP))
+				return 0
+			}
 		}
 
 		// validate that either the source or destination IP is allowed
 		var verdict int
-		allowed, err := f.validateIPs(logger, src, dst, srcIP, dstIP)
+		allowed, err := f.validateIPs(logger, src, dst)
 		if err != nil {
-			logger.Error("error validating IPs", zap.String("conn.src", src), zap.String("conn.dst", dst), zap.NamedError("error", err))
+			logger.Error("error validating IPs", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst), zap.NamedError("error", err))
 			verdict = nfqueue.NfDrop
 		} else {
 			if allowed {
-				logger.Info("allowing packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+				logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
 				verdict = nfqueue.NfAccept
 			} else {
-				logger.Info("dropping packet", zap.String("conn.src", src), zap.String("conn.dst", dst))
+				logger.Info("dropping packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
 				verdict = nfqueue.NfDrop
 			}
 		}
@@ -595,7 +706,7 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 	}
 }
 
-func (f *filter) validateIPs(logger *zap.Logger, src, dst string, srcIP, dstIP net.IP) (bool, error) {
+func (f *filter) validateIPs(logger *zap.Logger, src, dst netip.Addr) (bool, error) {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
 	if f.allowedIPs.EntryExists(dst) {
@@ -611,7 +722,7 @@ func (f *filter) validateIPs(logger *zap.Logger, src, dst string, srcIP, dstIP n
 
 	// preform reverse IP lookups on the destination and then source
 	// IPs only if the IPs are not private
-	if !dstIP.IsPrivate() {
+	if !dst.IsPrivate() {
 		allowed, err := f.lookupAndValidateIP(logger, dst)
 		if err != nil {
 			return false, err
@@ -621,16 +732,16 @@ func (f *filter) validateIPs(logger *zap.Logger, src, dst string, srcIP, dstIP n
 		}
 	}
 
-	if !srcIP.IsPrivate() {
+	if !src.IsPrivate() {
 		return f.lookupAndValidateIP(logger, src)
 	}
 
 	return false, nil
 }
 
-func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip string) (bool, error) {
-	logger.Info("preforming reverse IP lookup", zap.String("ip", ip))
-	names, err := net.LookupAddr(ip)
+func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, error) {
+	logger.Info("preforming reverse IP lookup", zap.Stringer("ip", ip))
+	names, err := net.LookupAddr(ip.String())
 	if err != nil {
 		// don't return error if IP simply couldn't be found
 		var dnsErr *net.DNSError
@@ -640,14 +751,16 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip string) (bool, error
 		return false, err
 	}
 
+	ttl := time.Duration(f.opts.AllowAnswersFor)
 	for i := range names {
+		// remove trailing dot if necessary before searching through
+		// allowed hostnames
 		if names[i][len(names[i])-1] == '.' {
 			names[i] = names[i][:len(names[i])-1]
 		}
 
 		if f.hostnameAllowed(names[i]) {
-			ttl := f.opts.AllowAnswersFor
-			logger.Info("allowing IP after reverse lookup", zap.String("ip", ip), zap.Duration("ttl", ttl))
+			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip), zap.Duration("ttl", ttl))
 			f.allowedIPs.AddEntry(ip, ttl)
 			return true, nil
 		}

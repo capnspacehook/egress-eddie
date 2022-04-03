@@ -106,6 +106,7 @@ var allowedSyscalls = seccomp.SyscallRules{
 	unix.SYS_MUNMAP:     {},
 	unix.SYS_NANOSLEEP:  {},
 	unix.SYS_NEWFSTATAT: {},
+	unix.SYS_READ:       {},
 	unix.SYS_RECVMSG: {
 		{
 			seccomp.MatchAny{},
@@ -118,9 +119,11 @@ var allowedSyscalls = seccomp.SyscallRules{
 			seccomp.EqualTo(unix.MSG_PEEK),
 		},
 	},
-	unix.SYS_RT_SIGPROCMASK: {},
-	unix.SYS_RT_SIGRETURN:   {},
-	unix.SYS_SCHED_YIELD:    {},
+	unix.SYS_RESTART_SYSCALL: {},
+	unix.SYS_RT_SIGACTION:    {},
+	unix.SYS_RT_SIGPROCMASK:  {},
+	unix.SYS_RT_SIGRETURN:    {},
+	unix.SYS_SCHED_YIELD:     {},
 	unix.SYS_SENDMSG: {
 		{
 			seccomp.MatchAny{},
@@ -139,6 +142,9 @@ var allowedSyscalls = seccomp.SyscallRules{
 }
 
 var networkSyscalls = seccomp.SyscallRules{
+	unix.SYS_CONNECT:     {},
+	unix.SYS_GETPEERNAME: {},
+	unix.SYS_GETSOCKNAME: {},
 	unix.SYS_OPENAT: {
 		{
 			seccomp.MatchAny{},
@@ -146,15 +152,18 @@ var networkSyscalls = seccomp.SyscallRules{
 			seccomp.EqualTo(unix.O_RDONLY | unix.O_CLOEXEC),
 		},
 	},
-	unix.SYS_READ:        {},
-	unix.SYS_CONNECT:     {},
-	unix.SYS_GETPEERNAME: {},
-	unix.SYS_GETSOCKNAME: {},
 	unix.SYS_SETSOCKOPT: {
 		{
 			seccomp.MatchAny{},
 			seccomp.EqualTo(unix.SOL_SOCKET),
 			seccomp.EqualTo(unix.SO_BROADCAST),
+			seccomp.MatchAny{},
+			seccomp.EqualTo(4),
+		},
+		{
+			seccomp.MatchAny{},
+			seccomp.EqualTo(unix.SOL_IPV6),
+			seccomp.EqualTo(unix.IPV6_V6ONLY),
 			seccomp.MatchAny{},
 			seccomp.EqualTo(4),
 		},
