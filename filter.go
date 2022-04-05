@@ -114,16 +114,8 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 	// Let the DNS response callback know everything is setup. The
 	// callback will be executing on another goroutine started by
 	// nfqueue.RegisterWithErrorFunc, but only after a packet is
-	// received on its nfqueue. We send in a goroutine here to avoid
-	// blocking until a packet is received so seccomp filters can be
-	// applied ASAP.
-	go func() {
-		f.ready <- struct{}{}
-		// Close the channel after the callback has received the
-		// message. This will ensure the callback will not block
-		// on a channel receive when called again.
-		close(f.ready)
-	}()
+	// received on its nfqueue.
+	close(f.ready)
 
 	return &f, nil
 }
@@ -160,12 +152,8 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
 		}
 		f.genericNF = genericNF
-		// let the generic packet callback know everything is setup;
-		// for more info see the comment in StartFilters above
-		go func() {
-			f.genericNFReady <- struct{}{}
-			close(f.genericNFReady)
-		}()
+		// let the generic packet callback know everything is setup
+		close(f.genericNFReady)
 
 		if len(f.opts.CachedHostnames) > 0 {
 			f.wg.Add(1)
@@ -183,12 +171,8 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
 		}
 		f.dnsReqNF = dnsNF
-		// let the DNS request callback know everything is setup;
-		// for more info see the comment in StartFilters above
-		go func() {
-			f.dnsReqNFReady <- struct{}{}
-			close(f.dnsReqNFReady)
-		}()
+		// let the DNS request callback know everything is setup
+		close(f.dnsReqNFReady)
 	}
 
 	return &f, nil
