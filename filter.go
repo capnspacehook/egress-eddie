@@ -18,15 +18,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// from github.com/torvalds/linux/tree/master/include/uapi/linux/netfilter/nf_conntrack_common.h
 const (
-	state_established = iota
-	state_related
-	state_new
-	state_is_reply
-	state_established_reply = state_established + state_is_reply
-	state_related_reply     = state_related + state_is_reply
-	state_untracked         = 7
+	// from github.com/torvalds/linux/tree/master/include/uapi/linux/netfilter/nf_conntrack_common.h
+	stateEstablished = iota
+	stateRelated
+	stateNew
+	stateIsReply
+	stateEstablishedReply = stateEstablished + stateIsReply
+	stateRelatedReply     = stateRelated + stateIsReply
+	stateUntracked        = 7
+
+	dnsQueryTimeout = time.Minute
 )
 
 type FilterManager struct {
@@ -337,7 +339,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		}
 
 		// verify DNS request is from a new or established connection
-		if *attr.CtInfo != state_new && !connIsEstablished(*attr.CtInfo) {
+		if *attr.CtInfo != stateNew && !connIsEstablished(*attr.CtInfo) {
 			logger.Warn("dropping DNS request with unknown state", zap.Uint32("conn.state", *attr.CtInfo))
 
 			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
@@ -376,7 +378,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 
 		// give DNS connections a minute to finish max
 		logger.Debug("adding connection")
-		f.connections.AddEntry(connID, time.Minute)
+		f.connections.AddEntry(connID, dnsQueryTimeout)
 
 		if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
@@ -389,7 +391,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 }
 
 func connIsEstablished(state uint32) bool {
-	return state == state_established || state == state_related || state == state_is_reply || state == state_related_reply
+	return state == stateEstablished || state == stateRelated || state == stateIsReply || state == stateRelatedReply
 }
 
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionID, error) {
