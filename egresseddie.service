@@ -1,0 +1,34 @@
+### 100% original example Systemd service file ###
+[Unit]
+Description="Egress connection filtering daemon"
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eddie
+WorkingDirectory=/home/eddie
+ExecStartPre=/home/eddie/egress-eddie -t
+ExecStart=/home/eddie/egress-eddie
+Restart=always
+
+# remove unneeded privileges
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+NoNewPrivileges=true
+MemoryDenyWriteExecute=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+# explicitly only give needed capability
+AmbientCapabilities=CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target
