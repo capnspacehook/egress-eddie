@@ -26,6 +26,16 @@ var configTests = []struct {
 		expectedErr:    `"inboundDNSQueue" must be set`,
 	},
 	{
+		testName: "inboundDNSQueue not valid",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 1
+
+[[filters]]`,
+		expectedConfig: nil,
+		expectedErr:    `"inboundDNSQueue.ipv4" and "inboundDNSQueue.ipv6" cannot be the same`,
+	},
+	{
 		testName: "name not set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -45,6 +55,64 @@ name = "foo"`,
 		expectedErr:    `filter "foo": "dnsQueue" must be set`,
 	},
 	{
+		testName: "dnsQueue not valid",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1000`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "dnsQueue.ipv4" and "dnsQueue.ipv6" cannot be the same`,
+	},
+	{
+		testName: "dnsQueue ipv4 not set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv6 = 1000`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "dnsQueue.ipv4" must be set when "inboundDNSQueue.ipv4" is set`,
+	},
+	{
+		testName: "dnsQueue ipv4 set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "dnsQueue.ipv4" must not be set when "inboundDNSQueue.ipv4" is not set`,
+	},
+	{
+		testName: "dnsQueue ipv6 not set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "dnsQueue.ipv6" must be set when "inboundDNSQueue.ipv6" is set`,
+	},
+	{
+		testName: "dnsQueue ipv6 set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "dnsQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`,
+	},
+	{
 		testName: "trafficQueue not set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -54,6 +122,69 @@ name = "foo"
 dnsQueue.ipv4 = 1000`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "trafficQueue" must be set`,
+	},
+	{
+		testName: "trafficQueue not valid",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1001`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "trafficQueue.ipv4" and "trafficQueue.ipv6" cannot be the same`,
+	},
+	{
+		testName: "trafficQueue ipv4 not set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv6 = 1001`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "trafficQueue.ipv4" must be set when "inboundDNSQueue.ipv4" is set`,
+	},
+	{
+		testName: "trafficQueue ipv4 set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv6 = 1010
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "trafficQueue.ipv4" must not be set when "inboundDNSQueue.ipv4" is not set`,
+	},
+	{
+		testName: "trafficQueue ipv6 not set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv6 = 1000
+trafficQueue.ipv4 = 1001`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "trafficQueue.ipv6" must be set when "inboundDNSQueue.ipv6" is set`,
+	},
+	{
+		testName: "trafficQueue ipv6 set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "trafficQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`,
 	},
 	{
 		testName: "dnsQueue and trafficQueue same",
@@ -66,6 +197,92 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1000`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "dnsQueue" and "trafficQueue" must be different`,
+	},
+	{
+		testName: "selfDNSQueue invalid",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 10
+selfDNSQueue.ipv4 = 2
+selfDNSQueue.ipv6 = 2
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `"selfDNSQueue.ipv4" and "selfDNSQueue.ipv6" cannot be the same`,
+	},
+	{
+		testName: "selfDNSQueue ipv4 not set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv6 = 2
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `"selfDNSQueue.ipv4" must be set when "inboundDNSQueue.ipv4" is set`,
+	},
+	{
+		testName: "selfDNSQueue ipv4 set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+selfDNSQueue.ipv4 = 2
+selfDNSQueue.ipv6 = 3
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv6 = 1000
+trafficQueue.ipv6 = 1001
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `"selfDNSQueue.ipv4" must not be set when "inboundDNSQueue.ipv4" is not set`,
+	},
+	{
+		testName: "selfDNSQueue ipv6 not set",
+		configStr: `
+inboundDNSQueue.ipv6 = 1
+selfDNSQueue.ipv4 = 2
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv6 = 1000
+trafficQueue.ipv6 = 1001
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `"selfDNSQueue.ipv6" must be set when "inboundDNSQueue.ipv6" is set`,
+	},
+	{
+		testName: "selfDNSQueue ipv6 set",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 2
+selfDNSQueue.ipv6 = 3
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `"selfDNSQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`,
 	},
 	{
 		testName: "inboundDNSQueue and selfDNSQueue same",
@@ -154,7 +371,6 @@ inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
-dnsQueue.ipv4 = 1000
 allowAllHostnames = true
 cachedHostnames = ["foo"]`,
 		expectedConfig: nil,
@@ -167,7 +383,6 @@ inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
-dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 cachedHostnames = ["foo"]`,
 		expectedConfig: nil,

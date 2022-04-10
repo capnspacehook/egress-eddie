@@ -154,7 +154,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		isSelfFilter:   isSelfFilter,
 	}
 
-	if opts.TrafficQueue.set() {
+	if opts.TrafficQueue.eitherSet() {
 		f.allowedIPs = NewTimedCache[netip.Addr](f.logger, false)
 		f.additionalHostnames = NewTimedCache[string](filterLogger, false)
 
@@ -179,7 +179,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		}
 	}
 
-	if opts.DNSQueue.set() {
+	if opts.DNSQueue.eitherSet() {
 		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.DNSQueue, func(ipv6 bool) nfqueue.HookFunc {
 			return newDNSRequestCallback(&f, ipv6)
 		})
