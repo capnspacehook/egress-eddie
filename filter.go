@@ -34,12 +34,13 @@ const (
 type FilterManager struct {
 	ready chan struct{}
 
-	queueNum uint16
-	ipv6     bool
-
 	logger *zap.Logger
 
-	dnsRespNF *nfqueue.Nfqueue
+	queueNum4 uint16
+	queueNum6 uint16
+
+	dnsRespNF4 *nfqueue.Nfqueue
+	dnsRespNF6 *nfqueue.Nfqueue
 
 	filters []*filter
 }
@@ -53,8 +54,10 @@ type filter struct {
 
 	logger *zap.Logger
 
-	dnsReqNF  *nfqueue.Nfqueue
-	genericNF *nfqueue.Nfqueue
+	dnsReqNF4  *nfqueue.Nfqueue
+	dnsReqNF6  *nfqueue.Nfqueue
+	genericNF4 *nfqueue.Nfqueue
+	genericNF6 *nfqueue.Nfqueue
 
 	connections         *TimedCache[connectionID]
 	allowedIPs          *TimedCache[netip.Addr]
@@ -87,18 +90,21 @@ func (c connectionID) String() string {
 
 func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
 	f := FilterManager{
-		ready:    make(chan struct{}),
-		queueNum: config.InboundDNSQueue,
-		ipv6:     config.IPv6,
-		logger:   logger,
-		filters:  make([]*filter, len(config.Filters)),
+		ready:     make(chan struct{}),
+		logger:    logger,
+		queueNum4: config.InboundDNSQueue.IPv4,
+		queueNum6: config.InboundDNSQueue.IPv6,
+		filters:   make([]*filter, len(config.Filters)),
 	}
 
-	nf, err := startNfQueue(ctx, logger, config.InboundDNSQueue, config.IPv6, newDNSResponseCallback(&f))
+	nf4, nf6, err := startNfQueues(ctx, logger, config.InboundDNSQueue, func(ipv6 bool) nfqueue.HookFunc {
+		return newDNSResponseCallback(&f, ipv6)
+	})
 	if err != nil {
 		return nil, err
 	}
-	f.dnsRespNF = nf
+	f.dnsRespNF4 = nf4
+	f.dnsRespNF6 = nf6
 
 	for i := range config.Filters {
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
@@ -121,7 +127,12 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 }
 
 func (f *FilterManager) Stop() {
-	f.dnsRespNF.Close()
+	if f.dnsRespNF4 != nil {
+		f.dnsRespNF4.Close()
+	}
+	if f.dnsRespNF6 != nil {
+		f.dnsRespNF6.Close()
+	}
 
 	for i := range f.filters {
 		f.filters[i].close()
@@ -143,15 +154,18 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		isSelfFilter:   isSelfFilter,
 	}
 
-	if opts.TrafficQueue != 0 {
+	if opts.TrafficQueue.set() {
 		f.allowedIPs = NewTimedCache[netip.Addr](f.logger, false)
 		f.additionalHostnames = NewTimedCache[string](filterLogger, false)
 
-		genericNF, err := startNfQueue(ctx, filterLogger, opts.TrafficQueue, opts.IPv6, newGenericCallback(&f))
+		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.TrafficQueue, func(ipv6 bool) nfqueue.HookFunc {
+			return newGenericCallback(&f, ipv6)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
 		}
-		f.genericNF = genericNF
+		f.genericNF4 = nf4
+		f.genericNF6 = nf6
 		// let the generic packet callback know everything is setup
 		close(f.genericNFReady)
 
@@ -160,22 +174,42 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 			go func() {
 				defer f.wg.Done()
 
-				f.cacheHostnames(ctx, filterLogger, opts.IPv6)
+				f.cacheHostnames(ctx, filterLogger)
 			}()
 		}
 	}
 
-	if opts.DNSQueue != 0 {
-		dnsNF, err := startNfQueue(ctx, filterLogger, opts.DNSQueue, opts.IPv6, newDNSRequestCallback(&f))
+	if opts.DNSQueue.set() {
+		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.DNSQueue, func(ipv6 bool) nfqueue.HookFunc {
+			return newDNSRequestCallback(&f, ipv6)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
 		}
-		f.dnsReqNF = dnsNF
+		f.dnsReqNF4 = nf4
+		f.dnsReqNF6 = nf6
 		// let the DNS request callback know everything is setup
 		close(f.dnsReqNFReady)
 	}
 
 	return &f, nil
+}
+
+func startNfQueues(ctx context.Context, logger *zap.Logger, queues queue, hookGen func(ipv6 bool) nfqueue.HookFunc) (nf4 *nfqueue.Nfqueue, nf6 *nfqueue.Nfqueue, err error) {
+	if queues.IPv4 != 0 {
+		nf4, err = startNfQueue(ctx, logger, queues.IPv4, false, hookGen(false))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if queues.IPv6 != 0 {
+		nf6, err = startNfQueue(ctx, logger, queues.IPv6, true, hookGen(true))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return nf4, nf6, nil
 }
 
 func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (*nfqueue.Nfqueue, error) {
@@ -228,24 +262,19 @@ func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6
 	return nf, nil
 }
 
-func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bool) {
+func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	logger.Debug("starting cache loop")
 
 	var (
-		network = "ip4"
-		res     = new(net.Resolver)
-		ttl     = time.Duration(f.opts.ReCacheEvery) + time.Minute
-		timer   = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
+		res   = new(net.Resolver)
+		ttl   = time.Duration(f.opts.ReCacheEvery) + time.Minute
+		timer = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
 	)
-
-	if ipv6 {
-		network = "ip6"
-	}
 
 	for {
 		for i := range f.opts.CachedHostnames {
 			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
-			addrs, err := res.LookupNetIP(ctx, network, f.opts.CachedHostnames[i])
+			addrs, err := res.LookupNetIP(ctx, "ip", f.opts.CachedHostnames[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
@@ -287,11 +316,17 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger, ipv6 bo
 func (f *filter) close() {
 	f.wg.Wait()
 
-	if f.dnsReqNF != nil {
-		f.dnsReqNF.Close()
+	if f.dnsReqNF4 != nil {
+		f.dnsReqNF4.Close()
 	}
-	if f.genericNF != nil {
-		f.genericNF.Close()
+	if f.dnsReqNF6 != nil {
+		f.dnsReqNF6.Close()
+	}
+	if f.genericNF4 != nil {
+		f.genericNF4.Close()
+	}
+	if f.genericNF6 != nil {
+		f.genericNF6.Close()
 	}
 
 	f.connections.Stop()
@@ -303,14 +338,28 @@ func (f *filter) close() {
 	}
 }
 
-func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
+func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
+	var queueNum uint16
+	if !ipv6 {
+		queueNum = f.opts.DNSQueue.IPv4
+	} else {
+		queueNum = f.opts.DNSQueue.IPv6
+	}
+
 	logger := f.logger.With(zap.String("filter.type", "dns-req"))
-	logger = logger.With(zap.Uint16("queue.num", f.opts.DNSQueue))
+	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter is setup to prevent race conditions
 		<-f.dnsReqNFReady
+
+		var dnsReqNF *nfqueue.Nfqueue
+		if !ipv6 {
+			dnsReqNF = f.dnsReqNF4
+		} else {
+			dnsReqNF = f.dnsReqNF6
+		}
 
 		if attr.PacketID == nil {
 			return 0
@@ -326,13 +375,13 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		if *attr.CtInfo != stateNew && !connIsEstablished(*attr.CtInfo) {
 			logger.Warn("dropping DNS request with unknown state", zap.Uint32("conn.state", *attr.CtInfo))
 
-			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
 			}
 			return 0
 		}
 
-		dns, connID, err := parseDNSPacket(*attr.Payload, f.opts.IPv6, false)
+		dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
 		if err != nil {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
@@ -343,7 +392,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		if dns.ANCount > 0 {
 			logger.Warn("dropping DNS reply sent to DNS request filter")
 
-			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
 			}
 			return 0
@@ -352,7 +401,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
 		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(logger, dns) {
-			if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
@@ -364,7 +413,7 @@ func newDNSRequestCallback(f *filter) nfqueue.HookFunc {
 		logger.Debug("adding connection")
 		f.connections.AddEntry(connID, dnsQueryTimeout)
 
-		if err := f.dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
+		if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 			logger.Debug("removing connection")
 			f.connections.RemoveEntry(connID)
@@ -493,14 +542,28 @@ func questionStrings(dnsQs []layers.DNSQuestion) []string {
 	return questions
 }
 
-func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
+func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
+	var queueNum uint16
+	if !ipv6 {
+		queueNum = f.queueNum4
+	} else {
+		queueNum = f.queueNum6
+	}
+
 	logger := f.logger.With(zap.String("filter.type", "dns-resp"))
-	logger = logger.With(zap.Uint16("queue.num", f.queueNum))
+	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter manager is setup to prevent race conditions
 		<-f.ready
+
+		var dnsRespNF *nfqueue.Nfqueue
+		if !ipv6 {
+			dnsRespNF = f.dnsRespNF4
+		} else {
+			dnsRespNF = f.dnsRespNF6
+		}
 
 		if attr.PacketID == nil {
 			return 0
@@ -520,13 +583,13 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		if !connIsEstablished(*attr.CtInfo) {
 			logger.Warn("dropping DNS response with that is not from an established connection", zap.Uint32("conn.state", *attr.CtInfo))
 
-			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
-		dns, connID, err := parseDNSPacket(*attr.Payload, f.ipv6, true)
+		dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 		if err != nil {
 			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
 			return 0
@@ -543,7 +606,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 		if connFilter == nil {
 			logger.Warn("dropping DNS response from unknown connection", zap.Strings("questions", questionStrings(dns.Questions)))
 
-			if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
@@ -561,7 +624,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			// block requests for disallowed hostnames but it doesn't
 			// hurt to check
 			if !connFilter.validateDNSQuestions(logger, dns) {
-				if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.NamedError("error", err))
 				}
 				return 0
@@ -598,7 +661,7 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 			}
 		}
 
-		if err := f.dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
+		if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 		}
 
@@ -606,14 +669,28 @@ func newDNSResponseCallback(f *FilterManager) nfqueue.HookFunc {
 	}
 }
 
-func newGenericCallback(f *filter) nfqueue.HookFunc {
+func newGenericCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
+	var queueNum uint16
+	if !ipv6 {
+		queueNum = f.opts.TrafficQueue.IPv4
+	} else {
+		queueNum = f.opts.TrafficQueue.IPv6
+	}
+
 	logger := f.logger.With(zap.String("filter.type", "traffic"))
-	logger = logger.With(zap.Uint16("queue.num", f.opts.TrafficQueue))
+	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter is setup to prevent race conditions
 		<-f.genericNFReady
+
+		var genericNF *nfqueue.Nfqueue
+		if !ipv6 {
+			genericNF = f.genericNF4
+		} else {
+			genericNF = f.genericNF6
+		}
 
 		if attr.PacketID == nil {
 			return 0
@@ -630,7 +707,7 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 		)
 
 		// parse packet
-		if !f.opts.IPv6 {
+		if !ipv6 {
 			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
 			parser.IgnoreUnsupported = true
 			parser.SetDecodingLayerContainer(gopacket.DecodingLayerArray(nil))
@@ -684,7 +761,7 @@ func newGenericCallback(f *filter) nfqueue.HookFunc {
 			}
 		}
 
-		if err := f.genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
+		if err := genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 		}
 

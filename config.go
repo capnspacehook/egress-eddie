@@ -23,18 +23,44 @@ func (d *duration) UnmarshalText(text []byte) error {
 	return nil
 }
 
+type queue struct {
+	IPv4 uint16
+	IPv6 uint16
+}
+
+func (q queue) valid() bool {
+	if !q.set() {
+		return true
+	}
+
+	return q.IPv4 != q.IPv6
+}
+
+func (q queue) set() bool {
+	return q.IPv4 != 0 || q.IPv6 != 0
+}
+
+func queuesShared(q1, q2 queue) bool {
+	if q1.IPv4 != 0 && q2.IPv4 != 0 && q1.IPv4 == q2.IPv4 {
+		return true
+	}
+	if q1.IPv6 != 0 && q2.IPv6 != 0 && q1.IPv6 == q2.IPv6 {
+		return true
+	}
+
+	return false
+}
+
 type Config struct {
-	InboundDNSQueue uint16
-	SelfDNSQueue    uint16
-	IPv6            bool
+	InboundDNSQueue queue
+	SelfDNSQueue    queue
 	Filters         []FilterOptions
 }
 
 type FilterOptions struct {
 	Name              string
-	DNSQueue          uint16
-	TrafficQueue      uint16
-	IPv6              bool
+	DNSQueue          queue
+	TrafficQueue      queue
 	AllowAllHostnames bool
 	LookupUnknownIPs  bool
 	AllowAnswersFor   duration
@@ -62,7 +88,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	if len(config.Filters) == 0 {
 		return nil, errors.New("at least one filter must be specified")
 	}
-	if config.InboundDNSQueue == 0 {
+	if !config.InboundDNSQueue.set() {
 		return nil, errors.New(`"inboundDNSQueue" must be set`)
 	}
 
@@ -74,20 +100,20 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		filterQueues = make(map[uint16]string)
 	)
 	for i, filterOpt := range config.Filters {
-
+		// TODO: check that dnsQueue and trafficQueue ipv4,ipv6 set consistently
 		if filterOpt.Name == "" {
 			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
 		}
-		if filterOpt.DNSQueue == 0 && len(filterOpt.CachedHostnames) == 0 && !filterOpt.LookupUnknownIPs {
+		if !filterOpt.DNSQueue.set() && len(filterOpt.CachedHostnames) == 0 && !filterOpt.LookupUnknownIPs {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must be set`, filterOpt.Name)
 		}
-		if filterOpt.TrafficQueue == 0 && !filterOpt.AllowAllHostnames {
+		if !filterOpt.TrafficQueue.set() && !filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
 		}
-		if filterOpt.TrafficQueue > 0 && filterOpt.AllowAllHostnames {
+		if filterOpt.TrafficQueue.set() && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must not be set when "allowAllHostnames" is true`, filterOpt.Name)
 		}
-		if filterOpt.DNSQueue == filterOpt.TrafficQueue {
+		if queuesShared(filterOpt.DNSQueue, filterOpt.TrafficQueue) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 		if len(filterOpt.AllowedHostnames) == 0 && !filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) == 0 && !filterOpt.LookupUnknownIPs {
@@ -111,21 +137,31 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.ReCacheEvery > 0 && len(filterOpt.CachedHostnames) == 0 {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedHostnames" is empty`, filterOpt.Name)
 		}
-		if filterOpt.DNSQueue != 0 && len(filterOpt.AllowedHostnames) == 0 && (len(filterOpt.CachedHostnames) > 0 || filterOpt.LookupUnknownIPs) {
+		if filterOpt.DNSQueue.set() && len(filterOpt.AllowedHostnames) == 0 && (len(filterOpt.CachedHostnames) > 0 || filterOpt.LookupUnknownIPs) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
 		}
 
 		if idx, ok := filterNames[filterOpt.Name]; ok {
 			return nil, fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
 		}
-		if filterOpt.DNSQueue != 0 {
-			if name, ok := filterQueues[filterOpt.DNSQueue]; ok {
-				return nil, fmt.Errorf(`filter %q: dnsQueue %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue, name)
+		if filterOpt.DNSQueue.IPv4 != 0 {
+			if name, ok := filterQueues[filterOpt.DNSQueue.IPv4]; ok {
+				return nil, fmt.Errorf(`filter %q: dnsQueue.ipv4 %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv4, name)
 			}
 		}
-		if filterOpt.TrafficQueue != 0 {
-			if name, ok := filterQueues[filterOpt.TrafficQueue]; ok {
-				return nil, fmt.Errorf(`filter %q: trafficQueue %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue, name)
+		if filterOpt.DNSQueue.IPv6 != 0 {
+			if name, ok := filterQueues[filterOpt.DNSQueue.IPv6]; ok {
+				return nil, fmt.Errorf(`filter %q: dnsQueue.ipv6 %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv6, name)
+			}
+		}
+		if filterOpt.TrafficQueue.IPv4 != 0 {
+			if name, ok := filterQueues[filterOpt.TrafficQueue.IPv4]; ok {
+				return nil, fmt.Errorf(`filter %q: trafficQueue.ipv4 %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv4, name)
+			}
+		}
+		if filterOpt.TrafficQueue.IPv6 != 0 {
+			if name, ok := filterQueues[filterOpt.TrafficQueue.IPv6]; ok {
+				return nil, fmt.Errorf(`filter %q: trafficQueue.ipv6 %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv6, name)
 			}
 		}
 
@@ -137,31 +173,36 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 
 		filterNames[filterOpt.Name] = i
-		if filterOpt.DNSQueue != 0 {
-			filterQueues[filterOpt.DNSQueue] = filterOpt.Name
+		if filterOpt.DNSQueue.IPv4 != 0 {
+			filterQueues[filterOpt.DNSQueue.IPv4] = filterOpt.Name
 		}
-		if filterOpt.TrafficQueue != 0 {
-			filterQueues[filterOpt.TrafficQueue] = filterOpt.Name
+		if filterOpt.DNSQueue.IPv6 != 0 {
+			filterQueues[filterOpt.DNSQueue.IPv6] = filterOpt.Name
+		}
+		if filterOpt.TrafficQueue.IPv4 != 0 {
+			filterQueues[filterOpt.TrafficQueue.IPv4] = filterOpt.Name
+		}
+		if filterOpt.TrafficQueue.IPv6 != 0 {
+			filterQueues[filterOpt.TrafficQueue.IPv6] = filterOpt.Name
 		}
 	}
 
-	if config.SelfDNSQueue == 0 && (preformReverseLookups || len(allCachedHostnames) > 0) {
+	if !config.SelfDNSQueue.set() && (preformReverseLookups || len(allCachedHostnames) > 0) {
 		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`)
 	}
-	if config.SelfDNSQueue > 0 && !preformReverseLookups && len(allCachedHostnames) == 0 {
+	if config.SelfDNSQueue.set() && !preformReverseLookups && len(allCachedHostnames) == 0 {
 		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`)
 	}
-	if config.InboundDNSQueue == config.SelfDNSQueue {
+	if queuesShared(config.InboundDNSQueue, config.SelfDNSQueue) {
 		return nil, errors.New(`"inboundDNSQueue" and "selfDNSQueue" must be different`)
 	}
 
 	// if 'selfDNSQueue' is specified, create a filter that will allow
 	// Egress Eddie to only make required DNS queries
-	if config.SelfDNSQueue > 0 {
+	if config.SelfDNSQueue.set() {
 		selfFilter := FilterOptions{
 			Name:     selfFilterName,
 			DNSQueue: config.SelfDNSQueue,
-			IPv6:     config.IPv6,
 		}
 
 		if preformReverseLookups {

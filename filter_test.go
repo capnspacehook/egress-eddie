@@ -12,20 +12,22 @@ import (
 
 func TestFiltering(t *testing.T) {
 	configStr := `
-inboundDNSQueue = 1
-ipv6 = false
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 10
 
 [[filters]]
 name = "test"
-dnsQueue = 1000
-trafficQueue = 1001
-ipv6 = false
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011
 allowAnswersFor = "3s"
 allowedHostnames = [
 	"google.com",
 	"gist.github.com",
 ]`
 
+	// TODO: test ipv6
 	client, stop := initFilters(
 		t,
 		configStr,
@@ -73,13 +75,13 @@ allowedHostnames = [
 
 func TestAllowAll(t *testing.T) {
 	configStr := `
-inboundDNSQueue = 1
-ipv6 = false
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 10
 
 [[filters]]
 name = "test"
-dnsQueue = 1000
-ipv6 = false
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010
 allowAllHostnames = true`
 
 	client, stop := initFilters(
@@ -99,14 +101,15 @@ allowAllHostnames = true`
 
 func TestCaching(t *testing.T) {
 	configStr := `
-inboundDNSQueue = 1
-selfDNSQueue = 100
-ipv6 = false
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 10
+selfDNSQueue.ipv4 = 100
+selfDNSQueue.ipv6 = 110
 
 [[filters]]
 name = "test"
-trafficQueue = 1001
-ipv6 = false
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011
 reCacheEvery = "1m"
 cachedHostnames = [
 	"digitalocean.com",

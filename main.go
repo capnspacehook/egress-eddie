@@ -84,7 +84,8 @@ func main() {
 	// These rules can only apply when egress-eddie does not need to make
 	// network connections, as currently it seems landlock does not support
 	// networking.
-	if config.SelfDNSQueue == 0 {
+	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
+	if !needsNetworking {
 		var allowedPaths []landlock.PathOpt
 		if logPath != "stdout" && logPath != "stderr" {
 			allowedPaths = []landlock.PathOpt{
@@ -124,7 +125,7 @@ func main() {
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of
 	// the process's lifetime.
-	numAllowedSyscalls, err := installSeccompFilters(logger, config.SelfDNSQueue != 0)
+	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking)
 	if err != nil {
 		logger.Error("error setting seccomp rules", zap.NamedError("error", err))
 		return
