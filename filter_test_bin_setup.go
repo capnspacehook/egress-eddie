@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http.Client, func()) {
+func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, func()) {
 	f, err := os.CreateTemp("", "egress_eddie")
 	if err != nil {
 		t.Fatalf("error creating config file: %v", err)
@@ -26,9 +26,14 @@ func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http
 		t.Fatalf("error closing config file: %v", err)
 	}
 
-	iptablesCmd(t, "-F")
+	iptablesCmd(t, false, "-F")
 	for _, command := range iptablesRules {
-		iptablesCmd(t, command)
+		iptablesCmd(t, false, command)
+	}
+
+	iptablesCmd(t, true, "-F")
+	for _, command := range ip6tablesRules {
+		iptablesCmd(t, true, command)
 	}
 
 	tp := &http.Transport{
@@ -63,7 +68,8 @@ func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http
 		}
 		os.Remove(configPath)
 
-		iptablesCmd(t, "-F")
+		iptablesCmd(t, false, "-F")
+		iptablesCmd(t, true, "-F")
 	}
 
 	return client, stop

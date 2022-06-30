@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -27,50 +29,58 @@ allowedHostnames = [
 	"gist.github.com",
 ]`
 
-	// TODO: test ipv6
-	client, stop := initFilters(
+	client4, client6, stop := initFilters(
 		t,
 		configStr,
-		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
-		"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1001",
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
+			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1001",
+		},
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
+			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1011",
+		},
 	)
 	defer stop()
 
 	is := is.New(t)
 
-	resp, err := client.Get("https://google.com")
+	err := makeHTTPReqs(client4, client6, "https://google.com")
 	is.NoErr(err) // request to allowed hostname should succeed
-	resp.Body.Close()
 
-	resp, err = client.Get("https://news.google.com")
+	err = makeHTTPReqs(client4, client6, "https://news.google.com")
 	is.NoErr(err) // request to allowed subdomain of hostname should succeed
-	resp.Body.Close()
 
-	resp, err = client.Get("https://gist.github.com")
+	err = makeHTTPReqs(client4, client6, "https://gist.github.com")
 	is.NoErr(err) // request to allowed hostname should succeed
-	resp.Body.Close()
 
-	resp, err = client.Get("https://github.com")
+	err = makeHTTPReqs(client4, client6, "https://github.com")
 	is.NoErr(err) // request to allowed hostname from response CNAME should succeed
-	resp.Body.Close()
 
-	_, err = client.Get("https://microsoft.com")
+	err = makeHTTPReqs(client4, client6, "https://microsoft.com")
 	is.True(reqFailed(err)) // request to disallowed hostname should fail
 
-	_, err = client.Get("https://ggoogle.com")
+	err = makeHTTPReqs(client4, client6, "https://.com")
 	is.True(reqFailed(err)) // test subdomain matching works correctly
 
-	_, err = client.Get("https://1.1.1.1")
-	is.True(reqFailed(err)) // request to IP of disallowed hostname should fail
+	_, err = client4.Get("https://1.1.1.1")
+	is.True(reqFailed(err)) // request to IPv4 IP of disallowed hostname should fail
+	//_, err = client.Get("https://2606:4700:4700::1111")
+	//is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
 
-	addrs, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "google.com")
-	is.NoErr(err) // lookup of allowed hostname should succeed
+	addrs4, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "google.com")
+	is.NoErr(err) // IPv4 lookup of allowed hostname should succeed
+	addrs6, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip6", "google.com")
+	is.NoErr(err) // IPv6 lookup of allowed hostname should succeed
 
 	time.Sleep(4 * time.Second) // wait until IPs should expire
 
-	_, err = client.Get("https://" + addrs[0].Unmap().String())
-	is.True(reqFailed(err)) // request to expired IP should fail
+	_, err = client4.Get("https://" + addrs4[0].Unmap().String())
+	is.True(reqFailed(err)) // request to expired IPv4 IP should fail
+	_, err = client6.Get("https://[" + addrs6[0].Unmap().String() + "]")
+	is.True(reqFailed(err)) // request to expired IPv6 IP should fail
 }
 
 func TestAllowAll(t *testing.T) {
@@ -84,17 +94,23 @@ dnsQueue.ipv4 = 1000
 dnsQueue.ipv6 = 1010
 allowAllHostnames = true`
 
-	client, stop := initFilters(
+	client4, _, stop := initFilters(
 		t,
 		configStr,
-		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
+		},
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
+		},
 	)
 	defer stop()
 
 	is := is.New(t)
 
-	resp, err := client.Get("https://harmony.shinesparkers.net")
+	resp, err := client4.Get("https://harmony.shinesparkers.net")
 	is.NoErr(err) // request to hostname should succeed
 	resp.Body.Close()
 }
@@ -122,12 +138,19 @@ cachedHostnames = [
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", "digitalocean.com")
 	is.NoErr(err)
 
-	client, stop := initFilters(
+	client4, _, stop := initFilters(
 		t,
 		configStr,
-		"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
-		"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
-		"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
+			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
+		},
+		[]string{
+			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 110",
+			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1011",
+		},
 	)
 	defer stop()
 
@@ -138,13 +161,30 @@ cachedHostnames = [
 		// skip IPv6 addresses, causes an error when preforming a GET request
 		addr = addr.Unmap()
 
-		resp, err := client.Get("http://" + addr.String())
+		resp, err := client4.Get("http://" + addr.String())
 		is.NoErr(err) // request to IP of cached hostname should succeed
 		resp.Body.Close()
 	}
 
 	_, err = net.DefaultResolver.LookupNetIP(ctx, "ip4", "microsoft.com")
 	is.True(reqFailed(err)) // lookup of disallowed domain should fail
+}
+
+func makeHTTPReqs(client4, client6 *http.Client, addr string) error {
+	resp, err := client4.Get(addr)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	log.Println(">>> doing ipv6 <<<")
+	resp, err = client6.Get(addr)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	return nil
 }
 
 func reqFailed(err error) bool {

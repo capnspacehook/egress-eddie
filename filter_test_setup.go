@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -12,23 +13,43 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http.Client, func()) {
+func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client, func()) {
 	config, err := parseConfigBytes([]byte(configStr))
 	if err != nil {
 		t.Fatalf("error parsing config: %v", err)
 	}
 
-	iptablesCmd(t, "-F")
+	iptablesCmd(t, false, "-F")
 	for _, command := range iptablesRules {
-		iptablesCmd(t, command)
+		iptablesCmd(t, false, command)
 	}
 
-	tp := &http.Transport{
+	iptablesCmd(t, true, "-F")
+	for _, command := range ip6tablesRules {
+		iptablesCmd(t, true, command)
+	}
+
+	var dialer net.Dialer
+	tp4 := &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
 		MaxIdleConns:      1,
 		DisableKeepAlives: true,
 	}
-	client := &http.Client{
-		Transport: tp,
+	tp6 := &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp6", addr)
+		},
+		MaxIdleConns:      1,
+		DisableKeepAlives: true,
+	}
+	client4 := &http.Client{
+		Transport: tp4,
+		Timeout:   3 * time.Second,
+	}
+	client6 := &http.Client{
+		Transport: tp6,
 		Timeout:   3 * time.Second,
 	}
 
@@ -53,8 +74,9 @@ func initFilters(t *testing.T, configStr string, iptablesRules ...string) (*http
 	stop := func() {
 		cancel()
 		filters.Stop()
-		iptablesCmd(t, "-F")
+		iptablesCmd(t, false, "-F")
+		iptablesCmd(t, true, "-F")
 	}
 
-	return client, stop
+	return client4, client6, stop
 }
