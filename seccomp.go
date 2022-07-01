@@ -12,6 +12,12 @@ import (
 )
 
 var allowedSyscalls = seccomp.SyscallRules{
+	unix.SYS_CLOCK_GETTIME: {
+		{
+			seccomp.EqualTo(unix.CLOCK_MONOTONIC),
+			seccomp.MatchAny{},
+		},
+	},
 	unix.SYS_CLONE: {
 		// parent_tidptr and child_tidptr are always 0 because neither
 		// CLONE_PARENT_SETTID nor CLONE_CHILD_SETTID are used.

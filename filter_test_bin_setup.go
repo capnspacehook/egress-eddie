@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -12,7 +11,7 @@ import (
 	"time"
 )
 
-func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, func()) {
+func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client, func()) {
 	f, err := os.CreateTemp("", "egress_eddie")
 	if err != nil {
 		t.Fatalf("error creating config file: %v", err)
@@ -36,17 +35,7 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 		iptablesCmd(t, true, command)
 	}
 
-	tp := &http.Transport{
-		MaxIdleConns:      1,
-		DisableKeepAlives: true,
-	}
-	client := &http.Client{
-		Transport: tp,
-		Timeout:   3 * time.Second,
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	eddieCmd := exec.CommandContext(ctx, "./eddie", "-c", configPath, "-d", "-l", "stdout")
+	eddieCmd := exec.Command("./eddie", "-c", configPath, "-d", "-l", "stdout")
 	eddieCmd.Stdout = os.Stdout
 	eddieCmd.Stderr = os.Stderr
 	if err := eddieCmd.Start(); err != nil {
@@ -55,15 +44,15 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 
 	time.Sleep(time.Second)
 
+	client4, client6 := getHTTPClients()
+
 	stop := func() {
-		cancel()
+		eddieCmd.Process.Signal(os.Interrupt)
 
 		if err := eddieCmd.Wait(); err != nil {
 			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) {
-				if exitErr.ExitCode() > 0 || (exitErr.ExitCode() == -1 && len(exitErr.Stderr) != 0) {
-					t.Errorf("egress eddie exited with error: %v", err)
-				}
+			if errors.As(err, &exitErr) {
+				t.Errorf("egress eddie exited with error: %v", err)
 			}
 		}
 		os.Remove(configPath)
@@ -72,5 +61,5 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 		iptablesCmd(t, true, "-F")
 	}
 
-	return client, stop
+	return client4, client6, stop
 }

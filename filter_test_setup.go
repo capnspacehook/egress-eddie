@@ -4,10 +4,8 @@ package main
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -29,30 +27,6 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 		iptablesCmd(t, true, command)
 	}
 
-	var dialer net.Dialer
-	tp4 := &http.Transport{
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp4", addr)
-		},
-		MaxIdleConns:      1,
-		DisableKeepAlives: true,
-	}
-	tp6 := &http.Transport{
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp6", addr)
-		},
-		MaxIdleConns:      1,
-		DisableKeepAlives: true,
-	}
-	client4 := &http.Client{
-		Transport: tp4,
-		Timeout:   3 * time.Second,
-	}
-	client6 := &http.Client{
-		Transport: tp6,
-		Timeout:   3 * time.Second,
-	}
-
 	logCfg := zap.NewProductionConfig()
 	logCfg.OutputPaths = []string{"stderr"}
 	logCfg.Level.SetLevel(zap.DebugLevel)
@@ -70,6 +44,8 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 	if err != nil {
 		t.Fatalf("error starting filters: %v", err)
 	}
+
+	client4, client6 := getHTTPClients()
 
 	stop := func() {
 		cancel()

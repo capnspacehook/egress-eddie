@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"testing"
@@ -43,7 +42,7 @@ allowedHostnames = [
 			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
-	defer stop()
+	t.Cleanup(stop)
 
 	is := is.New(t)
 
@@ -53,10 +52,12 @@ allowedHostnames = [
 	err = makeHTTPReqs(client4, client6, "https://news.google.com")
 	is.NoErr(err) // request to allowed subdomain of hostname should succeed
 
-	err = makeHTTPReqs(client4, client6, "https://gist.github.com")
+	// TODO: github.com does not have AAAA record, so this will fail over
+	// IPv6. Find other website that will work here
+	err = makeHTTPReqs(client4, nil, "https://gist.github.com")
 	is.NoErr(err) // request to allowed hostname should succeed
 
-	err = makeHTTPReqs(client4, client6, "https://github.com")
+	err = makeHTTPReqs(client4, nil, "https://github.com")
 	is.NoErr(err) // request to allowed hostname from response CNAME should succeed
 
 	err = makeHTTPReqs(client4, client6, "https://microsoft.com")
@@ -67,8 +68,8 @@ allowedHostnames = [
 
 	_, err = client4.Get("https://1.1.1.1")
 	is.True(reqFailed(err)) // request to IPv4 IP of disallowed hostname should fail
-	//_, err = client.Get("https://2606:4700:4700::1111")
-	//is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
+	_, err = client6.Get("https://[2606:4700:4700::1111]")
+	is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
 
 	addrs4, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "google.com")
 	is.NoErr(err) // IPv4 lookup of allowed hostname should succeed
@@ -94,7 +95,7 @@ dnsQueue.ipv4 = 1000
 dnsQueue.ipv6 = 1010
 allowAllHostnames = true`
 
-	client4, _, stop := initFilters(
+	client4, client6, stop := initFilters(
 		t,
 		configStr,
 		[]string{
@@ -106,13 +107,12 @@ allowAllHostnames = true`
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
 		},
 	)
-	defer stop()
+	t.Cleanup(stop)
 
 	is := is.New(t)
 
-	resp, err := client4.Get("https://harmony.shinesparkers.net")
+	err := makeHTTPReqs(client4, client6, "https://harmony.shinesparkers.net")
 	is.NoErr(err) // request to hostname should succeed
-	resp.Body.Close()
 }
 
 func TestCaching(t *testing.T) {
@@ -133,7 +133,7 @@ cachedHostnames = [
 
 	is := is.New(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", "digitalocean.com")
 	is.NoErr(err)
@@ -152,7 +152,7 @@ cachedHostnames = [
 			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
-	defer stop()
+	t.Cleanup(stop)
 
 	// wait until hostnames responses are cached by filters
 	time.Sleep(3 * time.Second)
@@ -171,18 +171,21 @@ cachedHostnames = [
 }
 
 func makeHTTPReqs(client4, client6 *http.Client, addr string) error {
-	resp, err := client4.Get(addr)
-	if err != nil {
-		return err
+	if client4 != nil {
+		resp, err := client4.Get(addr)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 
-	log.Println(">>> doing ipv6 <<<")
-	resp, err = client6.Get(addr)
-	if err != nil {
-		return err
+	if client6 != nil {
+		resp, err := client6.Get(addr)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 
 	return nil
 }
