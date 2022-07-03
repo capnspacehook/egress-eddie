@@ -39,8 +39,8 @@ type FilterManager struct {
 	queueNum4 uint16
 	queueNum6 uint16
 
-	dnsRespNF4 *nfqueue.Nfqueue
-	dnsRespNF6 *nfqueue.Nfqueue
+	dnsRespNF4 enforcer
+	dnsRespNF6 enforcer
 
 	filters []*filter
 }
@@ -54,10 +54,12 @@ type filter struct {
 
 	logger *zap.Logger
 
-	dnsReqNF4  *nfqueue.Nfqueue
-	dnsReqNF6  *nfqueue.Nfqueue
-	genericNF4 *nfqueue.Nfqueue
-	genericNF6 *nfqueue.Nfqueue
+	dnsReqNF4  enforcer
+	dnsReqNF6  enforcer
+	genericNF4 enforcer
+	genericNF6 enforcer
+
+	res resolver
 
 	connections         *TimedCache[connectionID]
 	allowedIPs          *TimedCache[netip.Addr]
@@ -88,6 +90,18 @@ func (c connectionID) String() string {
 	return b.String()
 }
 
+type enforcer interface {
+	SetVerdict(id uint32, verdict int) error
+	Close() error
+}
+
+type resolver interface {
+	LookupNetIP(ctx context.Context, network string, host string) ([]netip.Addr, error)
+	LookupAddr(ctx context.Context, addr string) ([]string, error)
+}
+
+type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (enforcer, error)
+
 func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
 	f := FilterManager{
 		ready:     make(chan struct{}),
@@ -97,7 +111,16 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		filters:   make([]*filter, len(config.Filters)),
 	}
 
-	nf4, nf6, err := startNfQueues(ctx, logger, config.InboundDNSQueue, func(ipv6 bool) nfqueue.HookFunc {
+	newEnforcer := config.enforcerCreator
+	if newEnforcer == nil {
+		newEnforcer = startNfQueue
+	}
+	res := config.resolver
+	if res == nil {
+		res = &net.Resolver{}
+	}
+
+	nf4, nf6, err := startNfQueues(ctx, logger, config.InboundDNSQueue, newEnforcer, func(ipv6 bool) nfqueue.HookFunc {
 		return newDNSResponseCallback(&f, ipv6)
 	})
 	if err != nil {
@@ -108,7 +131,7 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 
 	for i := range config.Filters {
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
-		filter, err := startFilter(ctx, logger, &config.Filters[i], isSelfFilter)
+		filter, err := startFilter(ctx, logger, &config.Filters[i], isSelfFilter, newEnforcer, res)
 		if err != nil {
 			// TODO: stop other filters here
 			return nil, err
@@ -139,7 +162,7 @@ func (f *FilterManager) Stop() {
 	}
 }
 
-func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool) (*filter, error) {
+func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool, newEnforcer enforcerCreator, res resolver) (*filter, error) {
 	filterLogger := logger
 	if opts.Name != "" {
 		filterLogger = filterLogger.With(zap.String("filter.name", opts.Name))
@@ -150,6 +173,7 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		genericNFReady: make(chan struct{}),
 		opts:           opts,
 		logger:         filterLogger,
+		res:            res,
 		connections:    NewTimedCache[connectionID](logger, true),
 		isSelfFilter:   isSelfFilter,
 	}
@@ -158,11 +182,11 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 		f.allowedIPs = NewTimedCache[netip.Addr](f.logger, false)
 		f.additionalHostnames = NewTimedCache[string](filterLogger, false)
 
-		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.TrafficQueue, func(ipv6 bool) nfqueue.HookFunc {
+		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, func(ipv6 bool) nfqueue.HookFunc {
 			return newGenericCallback(&f, ipv6)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error starting traffic nfqueue %d: %v", opts.TrafficQueue, err)
+			return nil, fmt.Errorf("error starting traffic nfqueues: %v", err)
 		}
 		f.genericNF4 = nf4
 		f.genericNF6 = nf6
@@ -180,11 +204,11 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 	}
 
 	if opts.DNSQueue.eitherSet() {
-		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.DNSQueue, func(ipv6 bool) nfqueue.HookFunc {
+		nf4, nf6, err := startNfQueues(ctx, filterLogger, opts.DNSQueue, newEnforcer, func(ipv6 bool) nfqueue.HookFunc {
 			return newDNSRequestCallback(&f, ipv6)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error starting DNS nfqueue %d: %v", opts.DNSQueue, err)
+			return nil, fmt.Errorf("error starting DNS nfqueues: %v", err)
 		}
 		f.dnsReqNF4 = nf4
 		f.dnsReqNF6 = nf6
@@ -195,15 +219,15 @@ func startFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, i
 	return &f, nil
 }
 
-func startNfQueues(ctx context.Context, logger *zap.Logger, queues queue, hookGen func(ipv6 bool) nfqueue.HookFunc) (nf4 *nfqueue.Nfqueue, nf6 *nfqueue.Nfqueue, err error) {
+func startNfQueues(ctx context.Context, logger *zap.Logger, queues queue, newEnforcer enforcerCreator, hookGen func(ipv6 bool) nfqueue.HookFunc) (nf4 enforcer, nf6 enforcer, err error) {
 	if queues.IPv4 != 0 {
-		nf4, err = startNfQueue(ctx, logger, queues.IPv4, false, hookGen(false))
+		nf4, err = newEnforcer(ctx, logger, queues.IPv4, false, hookGen(false))
 		if err != nil {
 			return nil, nil, err
 		}
 	}
 	if queues.IPv6 != 0 {
-		nf6, err = startNfQueue(ctx, logger, queues.IPv6, true, hookGen(true))
+		nf6, err = newEnforcer(ctx, logger, queues.IPv6, true, hookGen(true))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -212,7 +236,7 @@ func startNfQueues(ctx context.Context, logger *zap.Logger, queues queue, hookGe
 	return nf4, nf6, nil
 }
 
-func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (*nfqueue.Nfqueue, error) {
+func startNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (enforcer, error) {
 	afFamily := unix.AF_INET
 	if ipv6 {
 		afFamily = unix.AF_INET6
@@ -266,15 +290,14 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	logger.Debug("starting cache loop")
 
 	var (
-		res   = new(net.Resolver)
-		ttl   = time.Duration(f.opts.ReCacheEvery) + time.Minute
+		ttl   = time.Duration(f.opts.ReCacheEvery) + dnsQueryTimeout
 		timer = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
 	)
 
 	for {
 		for i := range f.opts.CachedHostnames {
 			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
-			addrs, err := res.LookupNetIP(ctx, "ip", f.opts.CachedHostnames[i])
+			addrs, err := f.res.LookupNetIP(ctx, "ip", f.opts.CachedHostnames[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
@@ -354,7 +377,7 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		// wait until the filter is setup to prevent race conditions
 		<-f.dnsReqNFReady
 
-		var dnsReqNF *nfqueue.Nfqueue
+		var dnsReqNF enforcer
 		if !ipv6 {
 			dnsReqNF = f.dnsReqNF4
 		} else {
@@ -558,7 +581,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 		// wait until the filter manager is setup to prevent race conditions
 		<-f.ready
 
-		var dnsRespNF *nfqueue.Nfqueue
+		var dnsRespNF enforcer
 		if !ipv6 {
 			dnsRespNF = f.dnsRespNF4
 		} else {
@@ -685,7 +708,7 @@ func newGenericCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		// wait until the filter is setup to prevent race conditions
 		<-f.genericNFReady
 
-		var genericNF *nfqueue.Nfqueue
+		var genericNF enforcer
 		if !ipv6 {
 			genericNF = f.genericNF4
 		} else {
@@ -803,8 +826,12 @@ func (f *filter) validateIPs(logger *zap.Logger, src, dst netip.Addr) (bool, err
 }
 
 func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, error) {
+	// TODO: build from top-level context
+	ctx, cancel := context.WithTimeout(context.Background(), dnsQueryTimeout)
+	defer cancel()
+
 	logger.Info("preforming reverse IP lookup", zap.Stringer("ip", ip))
-	names, err := net.LookupAddr(ip.String())
+	names, err := f.res.LookupAddr(ctx, ip.String())
 	if err != nil {
 		// don't return error if IP simply couldn't be found
 		var dnsErr *net.DNSError

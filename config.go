@@ -52,6 +52,13 @@ func queuesShared(q1, q2 queue) bool {
 		return true
 	}
 
+	if q1.IPv4 != 0 && q2.IPv6 != 0 && q1.IPv4 == q2.IPv6 {
+		return true
+	}
+	if q1.IPv6 != 0 && q2.IPv4 != 0 && q1.IPv6 == q2.IPv4 {
+		return true
+	}
+
 	return false
 }
 
@@ -59,6 +66,9 @@ type Config struct {
 	InboundDNSQueue queue
 	SelfDNSQueue    queue
 	Filters         []FilterOptions
+
+	enforcerCreator enforcerCreator
+	resolver        resolver
 }
 
 type FilterOptions struct {
@@ -136,6 +146,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedHostnames) == 0 && (len(filterOpt.CachedHostnames) > 0 || filterOpt.LookupUnknownIPs) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
 		}
+		if queuesShared(config.InboundDNSQueue, filterOpt.DNSQueue) {
+			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
+		}
 
 		if !filterOpt.TrafficQueue.eitherSet() && !filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
@@ -157,6 +170,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 		if filterOpt.TrafficQueue.eitherSet() && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must not be set when "allowAllHostnames" is true`, filterOpt.Name)
+		}
+		if queuesShared(config.InboundDNSQueue, filterOpt.TrafficQueue) {
+			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
 		if queuesShared(filterOpt.DNSQueue, filterOpt.TrafficQueue) {
@@ -256,6 +272,14 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 	if queuesShared(config.InboundDNSQueue, config.SelfDNSQueue) {
 		return nil, errors.New(`"inboundDNSQueue" and "selfDNSQueue" must be different`)
+	}
+	for _, filter := range config.Filters {
+		if queuesShared(config.SelfDNSQueue, filter.DNSQueue) {
+			return nil, fmt.Errorf(`filter %q: "selfDNSQueue" and "dnsQueue" must be different`, filter.Name)
+		}
+		if queuesShared(config.SelfDNSQueue, filter.TrafficQueue) {
+			return nil, fmt.Errorf(`filter %q: "selfDNSQueue" and "trafficQueue" must be different`, filter.Name)
+		}
 	}
 
 	// if 'selfDNSQueue' is specified, create a filter that will allow

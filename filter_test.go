@@ -63,7 +63,7 @@ allowedHostnames = [
 	err = makeHTTPReqs(client4, client6, "https://microsoft.com")
 	is.True(reqFailed(err)) // request to disallowed hostname should fail
 
-	err = makeHTTPReqs(client4, client6, "https://.com")
+	err = makeHTTPReqs(client4, client6, "https://ggoogle.com")
 	is.True(reqFailed(err)) // test subdomain matching works correctly
 
 	_, err = client4.Get("https://1.1.1.1")
