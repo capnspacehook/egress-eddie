@@ -32,12 +32,12 @@ allowedHostnames = [
 		t,
 		configStr,
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
 			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1001",
 		},
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
 			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
@@ -99,11 +99,11 @@ allowAllHostnames = true`
 		t,
 		configStr,
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
 		},
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
 		},
 	)
@@ -142,12 +142,12 @@ cachedHostnames = [
 		t,
 		configStr,
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 1",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
 			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
 		},
 		[]string{
-			"-A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 10",
+			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 110",
 			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},

@@ -385,12 +385,15 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		}
 
 		if attr.PacketID == nil {
+			logger.Warn("got packet with no packet ID")
 			return 0
 		}
 		if attr.CtInfo == nil {
+			logger.Warn("got packet with no connection state")
 			return 0
 		}
 		if attr.Payload == nil {
+			logger.Warn("got packet with no payload")
 			return 0
 		}
 
@@ -589,12 +592,15 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 		}
 
 		if attr.PacketID == nil {
+			logger.Warn("got packet with no packet ID")
 			return 0
 		}
 		if attr.CtInfo == nil {
+			logger.Warn("got packet with no connection state")
 			return 0
 		}
 		if attr.Payload == nil {
+			logger.Warn("got packet with no payload")
 			return 0
 		}
 
@@ -725,9 +731,11 @@ func newGenericCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		}
 
 		if attr.PacketID == nil {
+			logger.Warn("got packet with no packet ID")
 			return 0
 		}
 		if attr.Payload == nil {
+			logger.Warn("got packet with no payload")
 			return 0
 		}
 
