@@ -15,6 +15,7 @@ import (
 )
 
 var (
+	// enable when debugging failures
 	debugLogging = false
 	dumpPackets  = false
 
@@ -27,11 +28,10 @@ var (
 	ipv4Disallowed     = netip.MustParseAddr("4.3.2.1").AsSlice()
 	ipv6Disallowed     = netip.MustParseAddr("::4:3:2:1").AsSlice()
 	allowedCNAME       = "cname.org"
-	allowedSRV         = "svr.dev"
 	trafficPayload     = gopacket.Payload([]byte("https://bit.ly/3aeUqbo"))
 )
 
-func FuzzConfig(f *testing.F) {
+func FuzzFiltering(f *testing.F) {
 	for _, tt := range configTests {
 		f.Add([]byte(tt.configStr))
 	}
@@ -390,14 +390,6 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 							Class: layers.DNSClassIN,
 							CNAME: []byte(allowedCNAME),
 						},
-						{
-							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeSRV,
-							Class: layers.DNSClassIN,
-							SRV: layers.DNSSRV{
-								Name: []byte(allowedSRV),
-							},
-						},
 					},
 				},
 				connState:       stateEstablished,
@@ -405,8 +397,6 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 			})
 
 			debugLog(logger, "send DNS request of allowed domain name (2)")
-			sendAllowReq()
-			debugLog(logger, "send DNS request of allowed domain name (3)")
 			sendAllowReq()
 			debugLog(logger, "testing blocking known DNS replies")
 			checkBlockingKnownDNSReplies(t, logger, cb, config, filter, ipv6, port, allowedName, disallowedName)
@@ -430,27 +420,8 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 					connState:       stateNew,
 					expectedVerdict: nfqueue.NfAccept,
 				})
-				debugLog(logger, "send DNS request of allowed domain name from previous SRV answer")
-				sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
-					ipv6:    ipv6,
-					srcPort: port,
-					dstPort: 53,
-					finalLayer: &layers.DNS{
-						QDCount: 1,
-						Questions: []layers.DNSQuestion{
-							{
-								Name:  []byte(allowedSRV),
-								Type:  rType,
-								Class: layers.DNSClassIN,
-							},
-						},
-					},
-					connState:       stateNew,
-					expectedVerdict: nfqueue.NfAccept,
-				})
 
 				checkBlockingDNSRequests(t, logger, cb, config, filter, ipv6, port, allowedCNAME, disallowedName)
-				checkBlockingDNSRequests(t, logger, cb, config, filter, ipv6, port, allowedSRV, disallowedName)
 			}
 		}
 	}
