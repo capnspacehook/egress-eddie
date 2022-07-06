@@ -18,15 +18,17 @@ var (
 	debugLogging = false
 	dumpPackets  = false
 
-	ipv4Localhost  = netip.MustParseAddr("127.0.0.1").AsSlice()
-	ipv6Localhost  = netip.MustParseAddr("::1").AsSlice()
-	ipv4Answer     = netip.MustParseAddr("1.2.3.4").AsSlice()
-	ipv6Answer     = netip.MustParseAddr("::1:2:3:4").AsSlice()
-	ipv4Disallowed = netip.MustParseAddr("4.3.2.1").AsSlice()
-	ipv6Disallowed = netip.MustParseAddr("::4:3:2:1").AsSlice()
-	allowedCNAME   = "cname.org"
-	allowedSRV     = "svr.dev"
-	trafficPayload = gopacket.Payload([]byte("https://bit.ly/3aeUqbo"))
+	disallowedIPv4Port = uint16(2001)
+	disallowedIPv6Port = uint16(2011)
+	ipv4Localhost      = netip.MustParseAddr("127.0.0.1").AsSlice()
+	ipv6Localhost      = netip.MustParseAddr("::1").AsSlice()
+	ipv4Answer         = netip.MustParseAddr("1.2.3.4").AsSlice()
+	ipv6Answer         = netip.MustParseAddr("::1:2:3:4").AsSlice()
+	ipv4Disallowed     = netip.MustParseAddr("4.3.2.1").AsSlice()
+	ipv6Disallowed     = netip.MustParseAddr("::4:3:2:1").AsSlice()
+	allowedCNAME       = "cname.org"
+	allowedSRV         = "svr.dev"
+	trafficPayload     = gopacket.Payload([]byte("https://bit.ly/3aeUqbo"))
 )
 
 func FuzzConfig(f *testing.F) {
@@ -82,14 +84,15 @@ func FuzzConfig(f *testing.F) {
 			disallowedName := "no" + allowedName + "no"
 
 			if filter.DNSQueue.eitherSet() {
-				checkBlockingDNSRequests(t, logger, cb, config, filter, allowedName, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, config, filter, false, disallowedIPv4Port, allowedName, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, config, filter, true, disallowedIPv6Port, allowedName, disallowedName)
 				checkAllowingDNS(t, logger, cb, config, filter, allowIPv4Port, allowIPv6Port, allowedName, disallowedName)
 
 				allowIPv4Port++
 				allowIPv6Port++
 			}
 
-			checkBlockingDNSReplies(t, logger, cb, config, filter, allowedName, disallowedName)
+			checkBlockingUnknownDNSReplies(t, logger, cb, config, filter, allowedName)
 		}
 
 		for _, filter := range config.Filters {
@@ -107,190 +110,71 @@ func FuzzConfig(f *testing.F) {
 	})
 }
 
-func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, allowedName, disallowedName string) {
-	check := func(ipv6 bool, n uint16) {
-		port := uint16(1001)
-		qType := layers.DNSTypeA
-		answerIP := ipv4Answer
-		if ipv6 {
-			port = uint16(1011)
-			qType = layers.DNSTypeAAAA
-			answerIP = ipv6Answer
-		}
+func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
+	reqn := filter.DNSQueue.IPv4
+	qType := layers.DNSTypeA
+	answerIP := ipv4Answer
+	if ipv6 {
+		reqn = filter.DNSQueue.IPv6
+		qType = layers.DNSTypeAAAA
+		answerIP = ipv6Answer
+	}
 
-		// send DNS request of allowed domain name on disallowed connection state
-		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+	if reqn == 0 {
+		return
+	}
+
+	debugLog(logger, "send DNS request of allowed domain name on disallowed connection state")
+	sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+		ipv6:    ipv6,
+		srcPort: port,
+		dstPort: 53,
+		finalLayer: &layers.DNS{
+			QDCount: 1,
+			Questions: []layers.DNSQuestion{
+				{
+					Name:  []byte(allowedName),
+					Type:  qType,
+					Class: layers.DNSClassIN,
+				},
+			},
+		},
+		connState:       stateUntracked,
+		expectedVerdict: nfqueue.NfDrop,
+	})
+	debugLog(logger, "send DNS reply of allowed domain name on DNS request queue")
+	sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+		ipv6:    ipv6,
+		srcPort: port,
+		dstPort: 53,
+		finalLayer: &layers.DNS{
+			QDCount: 1,
+			Questions: []layers.DNSQuestion{
+				{
+					Name:  []byte(allowedName),
+					Type:  qType,
+					Class: layers.DNSClassIN,
+				},
+			},
+			ANCount: 1,
+			Answers: []layers.DNSResourceRecord{
+				{
+					Name:  []byte(allowedName),
+					Type:  qType,
+					Class: layers.DNSClassIN,
+					IP:    answerIP,
+				},
+			},
+		},
+		connState:       stateNew,
+		expectedVerdict: nfqueue.NfDrop,
+	})
+	if !filter.AllowAllHostnames {
+		debugLog(logger, "send DNS request of disallowed domain name")
+		sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
 			ipv6:    ipv6,
 			srcPort: port,
 			dstPort: 53,
-			finalLayer: &layers.DNS{
-				QDCount: 1,
-				Questions: []layers.DNSQuestion{
-					{
-						Name:  []byte(allowedName),
-						Type:  qType,
-						Class: layers.DNSClassIN,
-					},
-				},
-			},
-			connState:       stateUntracked,
-			expectedVerdict: nfqueue.NfDrop,
-		})
-		// send DNS reply of allowed domain name on DNS request queue
-		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-			ipv6:    ipv6,
-			srcPort: port,
-			dstPort: 53,
-			finalLayer: &layers.DNS{
-				QDCount: 1,
-				Questions: []layers.DNSQuestion{
-					{
-						Name:  []byte(allowedName),
-						Type:  qType,
-						Class: layers.DNSClassIN,
-					},
-				},
-				ANCount: 1,
-				Answers: []layers.DNSResourceRecord{
-					{
-						Name:  []byte(allowedName),
-						Type:  qType,
-						Class: layers.DNSClassIN,
-						IP:    answerIP,
-					},
-				},
-			},
-			connState:       stateNew,
-			expectedVerdict: nfqueue.NfDrop,
-		})
-		if !filter.AllowAllHostnames {
-			// send DNS request of disallowed domain name
-			sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-				ipv6:    ipv6,
-				srcPort: port,
-				dstPort: 53,
-				finalLayer: &layers.DNS{
-					QDCount: 1,
-					Questions: []layers.DNSQuestion{
-						{
-							Name:  []byte(disallowedName),
-							Type:  qType,
-							Class: layers.DNSClassIN,
-						},
-					},
-				},
-				connState:       stateNew,
-				expectedVerdict: nfqueue.NfDrop,
-			})
-			// send DNS request with no questions
-			sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-				ipv6:            ipv6,
-				srcPort:         port,
-				dstPort:         53,
-				finalLayer:      &layers.DNS{},
-				connState:       stateNew,
-				expectedVerdict: nfqueue.NfDrop,
-			})
-			// send DNS request of disallowed and allowed domain names
-			sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-				ipv6:    ipv6,
-				srcPort: port,
-				dstPort: 53,
-				finalLayer: &layers.DNS{
-					QDCount: 1,
-					Questions: []layers.DNSQuestion{
-						{
-							Name:  []byte(disallowedName),
-							Type:  qType,
-							Class: layers.DNSClassIN,
-						},
-						{
-							Name:  []byte(allowedName),
-							Type:  qType,
-							Class: layers.DNSClassIN,
-						},
-					},
-				},
-				connState:       stateNew,
-				expectedVerdict: nfqueue.NfDrop,
-			})
-			// send DNS request of allowed and disallowed domain names
-			sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-				ipv6:    ipv6,
-				srcPort: port,
-				dstPort: 53,
-				finalLayer: &layers.DNS{
-					QDCount: 1,
-					Questions: []layers.DNSQuestion{
-						{
-							Name:  []byte(allowedName),
-							Type:  qType,
-							Class: layers.DNSClassIN,
-						},
-						{
-							Name:  []byte(disallowedName),
-							Type:  qType,
-							Class: layers.DNSClassIN,
-						},
-					},
-				},
-				connState:       stateNew,
-				expectedVerdict: nfqueue.NfDrop,
-			})
-		}
-	}
-
-	if n := filter.DNSQueue.IPv4; n != 0 {
-		check(false, n)
-	}
-	if n := filter.DNSQueue.IPv6; n != 0 {
-		check(true, n)
-	}
-}
-
-func checkBlockingDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, allowedName, disallowedName string) {
-	check := func(ipv6 bool, n uint16) {
-		port := uint16(1001)
-		qType := layers.DNSTypeA
-		answerIP := ipv4Answer
-		if ipv6 {
-			port = uint16(1011)
-			qType = layers.DNSTypeAAAA
-			answerIP = ipv6Answer
-		}
-
-		// send DNS reply on a new connection
-		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-			ipv6:    ipv6,
-			srcPort: 53,
-			dstPort: port,
-			finalLayer: &layers.DNS{
-				QDCount: 1,
-				Questions: []layers.DNSQuestion{
-					{
-						Name:  []byte(allowedName),
-						Type:  qType,
-						Class: layers.DNSClassIN,
-					},
-				},
-				ANCount: 1,
-				Answers: []layers.DNSResourceRecord{
-					{
-						Name:  []byte(allowedName),
-						Type:  qType,
-						Class: layers.DNSClassIN,
-						IP:    answerIP,
-					},
-				},
-			},
-			connState:       stateNew,
-			expectedVerdict: nfqueue.NfDrop,
-		})
-		// send DNS reply with disallowed domain name as question
-		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
-			ipv6:    ipv6,
-			srcPort: 53,
-			dstPort: port,
 			finalLayer: &layers.DNS{
 				QDCount: 1,
 				Questions: []layers.DNSQuestion{
@@ -300,6 +184,93 @@ func checkBlockingDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config
 						Class: layers.DNSClassIN,
 					},
 				},
+			},
+			connState:       stateNew,
+			expectedVerdict: nfqueue.NfDrop,
+		})
+		debugLog(logger, "send DNS request with no questions")
+		sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+			ipv6:            ipv6,
+			srcPort:         port,
+			dstPort:         53,
+			finalLayer:      &layers.DNS{},
+			connState:       stateNew,
+			expectedVerdict: nfqueue.NfDrop,
+		})
+		debugLog(logger, "send DNS request of disallowed and allowed domain names")
+		sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+			ipv6:    ipv6,
+			srcPort: port,
+			dstPort: 53,
+			finalLayer: &layers.DNS{
+				QDCount: 1,
+				Questions: []layers.DNSQuestion{
+					{
+						Name:  []byte(disallowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+					{
+						Name:  []byte(allowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+				},
+			},
+			connState:       stateNew,
+			expectedVerdict: nfqueue.NfDrop,
+		})
+		debugLog(logger, "send DNS request of allowed and disallowed domain names")
+		sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+			ipv6:    ipv6,
+			srcPort: port,
+			dstPort: 53,
+			finalLayer: &layers.DNS{
+				QDCount: 1,
+				Questions: []layers.DNSQuestion{
+					{
+						Name:  []byte(allowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+					{
+						Name:  []byte(disallowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+				},
+			},
+			connState:       stateNew,
+			expectedVerdict: nfqueue.NfDrop,
+		})
+	}
+}
+
+func checkBlockingUnknownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, allowedName string) {
+	check := func(ipv6 bool, n uint16) {
+		port := uint16(2001)
+		qType := layers.DNSTypeA
+		answerIP := ipv4Answer
+		if ipv6 {
+			port = uint16(2011)
+			qType = layers.DNSTypeAAAA
+			answerIP = ipv6Answer
+		}
+
+		debugLog(logger, "send DNS reply on a new connection")
+		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+			ipv6:    ipv6,
+			srcPort: 53,
+			dstPort: port,
+			finalLayer: &layers.DNS{
+				QDCount: 1,
+				Questions: []layers.DNSQuestion{
+					{
+						Name:  []byte(allowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+				},
 				ANCount: 1,
 				Answers: []layers.DNSResourceRecord{
 					{
@@ -311,6 +282,33 @@ func checkBlockingDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config
 				},
 			},
 			connState:       stateNew,
+			expectedVerdict: nfqueue.NfDrop,
+		})
+		debugLog(logger, "send DNS reply on an unknown connection")
+		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+			ipv6:    ipv6,
+			srcPort: 53,
+			dstPort: port,
+			finalLayer: &layers.DNS{
+				QDCount: 1,
+				Questions: []layers.DNSQuestion{
+					{
+						Name:  []byte(allowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+					},
+				},
+				ANCount: 1,
+				Answers: []layers.DNSResourceRecord{
+					{
+						Name:  []byte(allowedName),
+						Type:  qType,
+						Class: layers.DNSClassIN,
+						IP:    answerIP,
+					},
+				},
+			},
+			connState:       stateEstablished,
 			expectedVerdict: nfqueue.NfDrop,
 		})
 	}
@@ -324,11 +322,6 @@ func checkBlockingDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config
 }
 
 func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ip4Port, ip6Port uint16, allowedName, disallowedName string) {
-	req4n := filter.DNSQueue.IPv4
-	req6n := filter.DNSQueue.IPv6
-	rply4n := config.InboundDNSQueue.IPv4
-	rply6n := config.InboundDNSQueue.IPv6
-
 	// If answers are allowed for too short of a time, we don't
 	// want to race against the connection getting forgotten.
 	// The self filter only processes DNS responses so it won't
@@ -336,37 +329,50 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 	attemptReplies := filter.DNSQueue == config.SelfDNSQueue || (filter.DNSQueue != config.SelfDNSQueue && time.Duration(filter.AllowAnswersFor) >= time.Millisecond)
 	allowVerdict := filter.AllowAllHostnames || filter.DNSQueue.eitherSet()
 
-	if req4n != 0 {
-		// send DNS request of allowed domain name
-		sendPacket(t, logger, cb, mockEnforcers[req4n], sendOpts{
-			ipv6:    false,
-			srcPort: ip4Port,
-			dstPort: 53,
-			finalLayer: &layers.DNS{
-				QDCount: 1,
-				Questions: []layers.DNSQuestion{
-					{
-						Name:  []byte(allowedName),
-						Type:  layers.DNSTypeA,
-						Class: layers.DNSClassIN,
-					},
-				},
-			},
-			connState:       stateNew,
-			expectedVerdict: nfqueue.NfAccept,
-		})
-		if rply4n != 0 && attemptReplies {
-			// send DNS reply of allowed domain name
-			sendPacket(t, logger, cb, mockEnforcers[rply4n], sendOpts{
-				ipv6:    false,
-				srcPort: 53,
-				dstPort: ip4Port,
+	check := func(ipv6 bool, reqn, rplyn uint16) {
+		port := ip4Port
+		rType := layers.DNSTypeA
+		answerIP := ipv4Answer
+		if ipv6 {
+			port = ip6Port
+			rType = layers.DNSTypeAAAA
+			answerIP = ipv6Answer
+		}
+
+		sendAllowReq := func() {
+			sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+				ipv6:    ipv6,
+				srcPort: port,
+				dstPort: 53,
 				finalLayer: &layers.DNS{
 					QDCount: 1,
 					Questions: []layers.DNSQuestion{
 						{
 							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeA,
+							Type:  rType,
+							Class: layers.DNSClassIN,
+						},
+					},
+				},
+				connState:       stateNew,
+				expectedVerdict: nfqueue.NfAccept,
+			})
+		}
+
+		debugLog(logger, "send DNS request of allowed domain name")
+		sendAllowReq()
+		if rplyn != 0 && attemptReplies {
+			debugLog(logger, "send DNS reply of allowed domain name")
+			sendPacket(t, logger, cb, mockEnforcers[rplyn], sendOpts{
+				ipv6:    ipv6,
+				srcPort: 53,
+				dstPort: port,
+				finalLayer: &layers.DNS{
+					QDCount: 1,
+					Questions: []layers.DNSQuestion{
+						{
+							Name:  []byte(allowedName),
+							Type:  rType,
 							Class: layers.DNSClassIN,
 						},
 					},
@@ -374,9 +380,9 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 					Answers: []layers.DNSResourceRecord{
 						{
 							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeA,
+							Type:  rType,
 							Class: layers.DNSClassIN,
-							IP:    ipv4Answer,
+							IP:    answerIP,
 						},
 						{
 							Name:  []byte(allowedName),
@@ -397,18 +403,26 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 				connState:       stateEstablished,
 				expectedVerdict: boolToVerdict(allowVerdict),
 			})
+
+			debugLog(logger, "send DNS request of allowed domain name (2)")
+			sendAllowReq()
+			debugLog(logger, "send DNS request of allowed domain name (3)")
+			sendAllowReq()
+			debugLog(logger, "testing blocking known DNS replies")
+			checkBlockingKnownDNSReplies(t, logger, cb, config, filter, ipv6, port, allowedName, disallowedName)
+
 			if filter.DNSQueue != config.SelfDNSQueue {
-				// send DNS request of allowed domain name from previous CNAME answer
-				sendPacket(t, logger, cb, mockEnforcers[req4n], sendOpts{
-					ipv6:    false,
-					srcPort: ip4Port,
+				debugLog(logger, "send DNS request of allowed domain name from previous CNAME answer")
+				sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+					ipv6:    ipv6,
+					srcPort: port,
 					dstPort: 53,
 					finalLayer: &layers.DNS{
 						QDCount: 1,
 						Questions: []layers.DNSQuestion{
 							{
 								Name:  []byte(allowedCNAME),
-								Type:  layers.DNSTypeA,
+								Type:  rType,
 								Class: layers.DNSClassIN,
 							},
 						},
@@ -416,17 +430,17 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 					connState:       stateNew,
 					expectedVerdict: nfqueue.NfAccept,
 				})
-				// send DNS request of allowed domain name from previous SRV answer
-				sendPacket(t, logger, cb, mockEnforcers[req4n], sendOpts{
-					ipv6:    false,
-					srcPort: ip4Port,
+				debugLog(logger, "send DNS request of allowed domain name from previous SRV answer")
+				sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
+					ipv6:    ipv6,
+					srcPort: port,
 					dstPort: 53,
 					finalLayer: &layers.DNS{
 						QDCount: 1,
 						Questions: []layers.DNSQuestion{
 							{
 								Name:  []byte(allowedSRV),
-								Type:  layers.DNSTypeA,
+								Type:  rType,
 								Class: layers.DNSClassIN,
 							},
 						},
@@ -434,109 +448,87 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 					connState:       stateNew,
 					expectedVerdict: nfqueue.NfAccept,
 				})
+
+				checkBlockingDNSRequests(t, logger, cb, config, filter, ipv6, port, allowedCNAME, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, config, filter, ipv6, port, allowedSRV, disallowedName)
 			}
 		}
 	}
-	if req6n != 0 {
-		// send DNS request of allowed domain name
-		sendPacket(t, logger, cb, mockEnforcers[req6n], sendOpts{
-			ipv6:    true,
-			srcPort: ip6Port,
-			dstPort: 53,
+
+	if reqn, rplyn := filter.DNSQueue.IPv4, config.InboundDNSQueue.IPv4; reqn != 0 {
+		check(false, reqn, rplyn)
+	}
+	if reqn, rplyn := filter.DNSQueue.IPv6, config.InboundDNSQueue.IPv6; reqn != 0 {
+		check(true, reqn, rplyn)
+	}
+}
+
+func checkBlockingKnownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
+	n := config.InboundDNSQueue.IPv4
+	rType := layers.DNSTypeA
+	answerIP := ipv4Answer
+	if ipv6 {
+		n = config.InboundDNSQueue.IPv6
+		rType = layers.DNSTypeAAAA
+		answerIP = ipv6Answer
+	}
+
+	debugLog(logger, "send DNS reply with disallowed domain name in question")
+	sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+		ipv6:    ipv6,
+		srcPort: 53,
+		dstPort: port,
+		finalLayer: &layers.DNS{
+			QDCount: 1,
+			Questions: []layers.DNSQuestion{
+				{
+					Name:  []byte(disallowedName),
+					Type:  rType,
+					Class: layers.DNSClassIN,
+				},
+			},
+			ANCount: 1,
+			Answers: []layers.DNSResourceRecord{
+				{
+					Name:  []byte(allowedName),
+					Type:  rType,
+					Class: layers.DNSClassIN,
+					IP:    answerIP,
+				},
+			},
+		},
+		connState:       stateEstablished,
+		expectedVerdict: nfqueue.NfDrop,
+	})
+
+	if filter.DNSQueue != config.SelfDNSQueue {
+		debugLog(logger, "send DNS reply with disallowed domain name in answer")
+		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+			ipv6:    ipv6,
+			srcPort: 53,
+			dstPort: port,
 			finalLayer: &layers.DNS{
 				QDCount: 1,
 				Questions: []layers.DNSQuestion{
 					{
 						Name:  []byte(allowedName),
-						Type:  layers.DNSTypeAAAA,
+						Type:  rType,
 						Class: layers.DNSClassIN,
 					},
 				},
-			},
-			connState:       stateNew,
-			expectedVerdict: nfqueue.NfAccept,
-		})
-		if rply6n != 0 && attemptReplies {
-			// send DNS reply of allowed domain name
-			sendPacket(t, logger, cb, mockEnforcers[rply6n], sendOpts{
-				ipv6:    true,
-				srcPort: 53,
-				dstPort: ip6Port,
-				finalLayer: &layers.DNS{
-					QDCount: 1,
-					Questions: []layers.DNSQuestion{
-						{
-							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeAAAA,
-							Class: layers.DNSClassIN,
-						},
-					},
-					ANCount: 1,
-					Answers: []layers.DNSResourceRecord{
-						{
-							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeAAAA,
-							Class: layers.DNSClassIN,
-							IP:    ipv6Answer,
-						},
-						{
-							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeCNAME,
-							Class: layers.DNSClassIN,
-							CNAME: []byte(allowedCNAME),
-						},
-						{
-							Name:  []byte(allowedName),
-							Type:  layers.DNSTypeSRV,
-							Class: layers.DNSClassIN,
-							SRV: layers.DNSSRV{
-								Name: []byte(allowedSRV),
-							},
-						},
+				ANCount: 1,
+				Answers: []layers.DNSResourceRecord{
+					{
+						Name:  []byte(disallowedName),
+						Type:  rType,
+						Class: layers.DNSClassIN,
+						IP:    answerIP,
 					},
 				},
-				connState:       stateEstablished,
-				expectedVerdict: boolToVerdict(allowVerdict),
-			})
-			if filter.DNSQueue != config.SelfDNSQueue {
-				// send DNS request of allowed domain name from previous CNAME answer
-				sendPacket(t, logger, cb, mockEnforcers[req6n], sendOpts{
-					ipv6:    true,
-					srcPort: ip6Port,
-					dstPort: 53,
-					finalLayer: &layers.DNS{
-						QDCount: 1,
-						Questions: []layers.DNSQuestion{
-							{
-								Name:  []byte(allowedCNAME),
-								Type:  layers.DNSTypeAAAA,
-								Class: layers.DNSClassIN,
-							},
-						},
-					},
-					connState:       stateNew,
-					expectedVerdict: nfqueue.NfAccept,
-				})
-				// send DNS request of allowed domain name from previous SRV answer
-				sendPacket(t, logger, cb, mockEnforcers[req6n], sendOpts{
-					ipv6:    true,
-					srcPort: ip6Port,
-					dstPort: 53,
-					finalLayer: &layers.DNS{
-						QDCount: 1,
-						Questions: []layers.DNSQuestion{
-							{
-								Name:  []byte(allowedSRV),
-								Type:  layers.DNSTypeAAAA,
-								Class: layers.DNSClassIN,
-							},
-						},
-					},
-					connState:       stateNew,
-					expectedVerdict: nfqueue.NfAccept,
-				})
-			}
-		}
+			},
+			connState:       stateEstablished,
+			expectedVerdict: nfqueue.NfDrop,
+		})
 	}
 }
 
@@ -556,7 +548,7 @@ func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, config *C
 			disallowedIP = ipv6Disallowed
 		}
 
-		// send traffic with allowed dst IP
+		debugLog(logger, "send traffic with allowed dst IP")
 		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 			ipv6:            ipv6,
 			srcIP:           localhostIP,
@@ -567,7 +559,7 @@ func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, config *C
 			connState:       stateNew,
 			expectedVerdict: boolToVerdict(allowVerdict),
 		})
-		// send traffic with allowed src IP
+		debugLog(logger, "send traffic with allowed src IP")
 		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 			ipv6:            ipv6,
 			srcIP:           answerIP,
@@ -578,7 +570,7 @@ func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, config *C
 			connState:       stateNew,
 			expectedVerdict: boolToVerdict(allowVerdict),
 		})
-		// send traffic with disallowed dst IP
+		debugLog(logger, "send traffic with disallowed dst IP")
 		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 			ipv6:            ipv6,
 			srcIP:           localhostIP,
@@ -589,7 +581,7 @@ func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, config *C
 			connState:       stateNew,
 			expectedVerdict: nfqueue.NfDrop,
 		})
-		// send traffic with disallowed src IP
+		debugLog(logger, "send traffic with disallowed src IP")
 		sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 			ipv6:            ipv6,
 			srcIP:           disallowedIP,
