@@ -62,6 +62,8 @@ func FuzzConfig(f *testing.F) {
 		// test that sending DNS requests, DNS responses, and traffic
 		// will not cause a panic and behaves as expected
 		for _, filter := range config.Filters {
+			debugLog(logger, "testing filter %q", filter.Name)
+
 			// TODO: handle cached hostnames and reverse lookups
 			if len(filter.AllowedHostnames) == 0 && !filter.AllowAllHostnames {
 				continue
@@ -158,6 +160,15 @@ func FuzzConfig(f *testing.F) {
 							connState:       stateNew,
 							expectedVerdict: nfqueue.NfDrop,
 						})
+						// send DNS request with no questions
+						sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+							ipv6:            false,
+							srcPort:         1001,
+							dstPort:         53,
+							finalLayer:      &layers.DNS{},
+							connState:       stateNew,
+							expectedVerdict: nfqueue.NfDrop,
+						})
 					}
 				}
 				if n := filter.DNSQueue.IPv6; n != 0 {
@@ -243,20 +254,23 @@ func FuzzConfig(f *testing.F) {
 							connState:       stateNew,
 							expectedVerdict: nfqueue.NfDrop,
 						})
+						// send DNS request with no questions
+						sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+							ipv6:            true,
+							srcPort:         1011,
+							dstPort:         53,
+							finalLayer:      &layers.DNS{},
+							connState:       stateNew,
+							expectedVerdict: nfqueue.NfDrop,
+						})
 					}
 				}
 			}
 
-			// If answers are allowed for too short of a time, we don't
-			// want to race against the connection getting forgotten.
-			// The self filter only processes DNS responses so it won't
-			// have an allowed answers duration set.
-			if filter.DNSQueue != config.SelfDNSQueue && time.Duration(filter.AllowAnswersFor) < time.Millisecond {
-				continue
-			}
+			allowVerdict := filter.AllowAllHostnames || filter.DNSQueue.eitherSet()
 
 			if n := config.InboundDNSQueue.IPv4; n != 0 {
-				// send DNS reply of allowed domain name
+				// send DNS reply on a new connection
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:    false,
 					srcPort: 53,
@@ -280,14 +294,49 @@ func FuzzConfig(f *testing.F) {
 							},
 						},
 					},
-					connState: stateEstablished,
-					// if no dns queue is set, the DNS request won't have
-					// been set so this should fail
-					expectedVerdict: boolToVerdict(filter.DNSQueue.eitherSet()),
+					connState:       stateNew,
+					expectedVerdict: nfqueue.NfDrop,
 				})
+				// If answers are allowed for too short of a time, we don't
+				// want to race against the connection getting forgotten.
+				// The self filter only processes DNS responses so it won't
+				// have an allowed answers duration set.
+				if filter.DNSQueue == config.SelfDNSQueue ||
+					(filter.DNSQueue != config.SelfDNSQueue &&
+						time.Duration(filter.AllowAnswersFor) >= time.Millisecond) {
+					// send DNS reply of allowed domain name
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    false,
+						srcPort: 53,
+						dstPort: 1000,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+								},
+							},
+							ANCount: 1,
+							Answers: []layers.DNSResourceRecord{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+									IP:    ipv4Answer,
+								},
+							},
+						},
+						connState: stateEstablished,
+						// if no dns queue is set, the DNS request won't have
+						// been set so this should fail
+						expectedVerdict: boolToVerdict(allowVerdict),
+					})
+				}
 			}
 			if n := config.InboundDNSQueue.IPv6; n != 0 {
-				// send DNS reply of allowed domain name
+				// send DNS reply on a new connection
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:    true,
 					srcPort: 53,
@@ -311,11 +360,48 @@ func FuzzConfig(f *testing.F) {
 							},
 						},
 					},
-					connState: stateEstablished,
+					connState: stateNew,
 					// if no dns queue is set, the DNS request won't have
 					// been set so this should fail
-					expectedVerdict: boolToVerdict(filter.DNSQueue.eitherSet()),
+					expectedVerdict: nfqueue.NfDrop,
 				})
+				// If answers are allowed for too short of a time, we don't
+				// want to race against the connection getting forgotten.
+				// The self filter only processes DNS responses so it won't
+				// have an allowed answers duration set.
+				if filter.DNSQueue == config.SelfDNSQueue ||
+					(filter.DNSQueue != config.SelfDNSQueue &&
+						time.Duration(filter.AllowAnswersFor) >= time.Millisecond) {
+					// send DNS reply of allowed domain name
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    true,
+						srcPort: 53,
+						dstPort: 1010,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeAAAA,
+									Class: layers.DNSClassIN,
+								},
+							},
+							ANCount: 1,
+							Answers: []layers.DNSResourceRecord{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeAAAA,
+									Class: layers.DNSClassIN,
+									IP:    ipv6Answer,
+								},
+							},
+						},
+						connState: stateEstablished,
+						// if no dns queue is set, the DNS request won't have
+						// been set so this should fail
+						expectedVerdict: boolToVerdict(allowVerdict),
+					})
+				}
 			}
 		}
 
@@ -324,8 +410,11 @@ func FuzzConfig(f *testing.F) {
 				continue
 			}
 
-			// TODO: flip src/dst, test reverse lookups
+			// If answers are allowed for too short of a time, we don't
+			// want to race against the connection getting forgotten.
+			// TODO: test reverse lookups
 			allowVerdict := filter.DNSQueue.eitherSet() && time.Duration(filter.AllowAnswersFor) >= time.Millisecond
+
 			if n := filter.TrafficQueue.IPv4; n != 0 {
 				// send traffic with allowed dst IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
@@ -338,7 +427,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: boolToVerdict(allowVerdict),
 				})
-
 				// send traffic with allowed src IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            false,
@@ -350,7 +438,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: boolToVerdict(allowVerdict),
 				})
-
 				// send traffic with disallowed dst IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            false,
@@ -362,7 +449,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: nfqueue.NfDrop,
 				})
-
 				// send traffic with disallowed src IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            false,
@@ -387,7 +473,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: boolToVerdict(allowVerdict),
 				})
-
 				// send traffic with allowed src IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            true,
@@ -399,7 +484,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: boolToVerdict(allowVerdict),
 				})
-
 				// send traffic with disallowed dst IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            true,
@@ -411,7 +495,6 @@ func FuzzConfig(f *testing.F) {
 					connState:       stateNew,
 					expectedVerdict: nfqueue.NfDrop,
 				})
-
 				// send traffic with disallowed src IP
 				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
 					ipv6:            true,
@@ -457,16 +540,6 @@ type sendOpts struct {
 }
 
 var (
-	ipv4DNSLayer = &layers.IPv4{
-		Protocol: layers.IPProtocolUDP,
-		SrcIP:    ipv4Localhost,
-		DstIP:    ipv4Localhost,
-	}
-	ipv6DNSLayer = &layers.IPv6{
-		NextHeader: layers.IPProtocolUDP,
-		SrcIP:      ipv6Localhost,
-		DstIP:      ipv6Localhost,
-	}
 	buf           = gopacket.NewSerializeBuffer()
 	serializeOpts = gopacket.SerializeOptions{
 		FixLengths: true,
@@ -476,28 +549,55 @@ var (
 
 func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, opts sendOpts) {
 	var (
-		ipLayer     gopacket.SerializableLayer = ipv4DNSLayer
-		ipLayerType                            = layers.IPProtocolIPv4
+		ipLayer         gopacket.SerializableLayer
+		ipLayerType     = layers.IPProtocolIPv4
+		verdictExpected bool
 	)
 	if opts.ipv6 {
-		ipLayer = ipv6DNSLayer
 		ipLayerType = layers.IPProtocolIPv6
 	}
 
-	// set the src and dst IPs for traffic packets
-	if opts.srcIP != nil || opts.dstIP != nil {
+	if opts.srcIP == nil || opts.dstIP == nil {
+		// if src or dst IPs aren't set, set them to localhost for DNS packets
 		if !opts.ipv6 {
-			ipLayer = &layers.IPv4{
-				Protocol: layers.IPProtocolUDP,
-				SrcIP:    opts.srcIP,
-				DstIP:    opts.dstIP,
-			}
+			opts.srcIP = ipv4Localhost
+			opts.dstIP = ipv4Localhost
 		} else {
-			ipLayer = &layers.IPv6{
-				NextHeader: layers.IPProtocolUDP,
-				SrcIP:      opts.srcIP,
-				DstIP:      opts.dstIP,
-			}
+			opts.srcIP = ipv6Localhost
+			opts.dstIP = ipv6Localhost
+		}
+
+		// Serialize and deserialize the DNS layer to ensure it can be
+		// decoded without errors. The fuzzer can sometimes create names
+		// in questions that can't be parsed by gopacket currently.
+		err := gopacket.SerializeLayers(buf, serializeOpts, opts.finalLayer)
+		if err != nil {
+			failAndDumpConfig(t, cb, "error serializing DNS packet: %v", err)
+		}
+
+		var (
+			dnsLayer layers.DNS
+			decoded  = make([]gopacket.LayerType, 0, 1)
+		)
+
+		parser := gopacket.NewDecodingLayerParser(layers.LayerTypeDNS, &dnsLayer)
+		err = parser.DecodeLayers(buf.Bytes(), &decoded)
+		if err == nil {
+			verdictExpected = true
+		}
+	}
+
+	if !opts.ipv6 {
+		ipLayer = &layers.IPv4{
+			Protocol: layers.IPProtocolUDP,
+			SrcIP:    opts.srcIP,
+			DstIP:    opts.dstIP,
+		}
+	} else {
+		ipLayer = &layers.IPv6{
+			NextHeader: layers.IPProtocolUDP,
+			SrcIP:      opts.srcIP,
+			DstIP:      opts.dstIP,
 		}
 	}
 
@@ -531,7 +631,7 @@ func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, op
 		Payload:  ref(buf.Bytes()),
 	})
 	verdict, ok := e.verdicts[packetID]
-	if !ok {
+	if verdictExpected && !ok {
 		failAndDumpConfig(t, cb, "packet did not receive a verdict")
 	}
 	if verdict != opts.expectedVerdict {
