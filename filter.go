@@ -673,27 +673,38 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 						return 0
 					}
 
-					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
-						// temporarily add A and AAAA answers to
-						// allowed IP list
+					switch answer.Type {
+					case layers.DNSTypeA, layers.DNSTypeAAAA:
+						// temporarily add A and AAAA answers to allowed IP list
 						ip, ok := netip.AddrFromSlice(answer.IP)
 						if !ok {
 							logger.Error("error converting IP", zap.Stringer("answer.ip", answer.IP))
 							continue
 						}
 
-						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Duration("answer.ttl", ttl))
+						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Stringer("answer.type", answer.Type), zap.Duration("answer.ttl", ttl))
 						connFilter.allowedIPs.AddEntry(ip, ttl)
-					} else if answer.Type == layers.DNSTypeCNAME {
-						// temporarily add CNAME answers to allowed
+					case layers.DNSTypeCNAME, layers.DNSTypeSRV, layers.DNSTypeMX, layers.DNSTypeNS:
+						// temporarily add CNAME, SRV, MX, and NS answers to allowed
 						// hostnames list
-						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.CNAME), zap.Duration("answer.ttl", ttl))
-						connFilter.additionalHostnames.AddEntry(string(answer.CNAME), ttl)
-					} else if answer.Type == layers.DNSTypeSRV {
-						// temporarily add SRV answers to allowed
-						// hostnames list
-						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", answer.SRV.Name), zap.Duration("answer.ttl", ttl))
-						connFilter.additionalHostnames.AddEntry(string(answer.SRV.Name), ttl)
+						var name []byte
+						switch answer.Type {
+						case layers.DNSTypeCNAME:
+							name = answer.CNAME
+						case layers.DNSTypeSRV:
+							name = answer.SRV.Name
+						case layers.DNSTypeMX:
+							name = answer.MX.Name
+						case layers.DNSTypeNS:
+							name = answer.NS
+						}
+
+						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", name), zap.Stringer("answer.type", answer.Type), zap.Duration("answer.ttl", ttl))
+						connFilter.additionalHostnames.AddEntry(string(name), ttl)
+					default:
+						// don't need to specifically handle other answer
+						// types, the packet will be allowed so whoever
+						// made the DNS request will see this answer
 					}
 				}
 			}

@@ -24,8 +24,11 @@ trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "3s"
 allowedHostnames = [
+	"debian.org",
+	"facebook.com",
 	"google.com",
 	"gist.github.com",
+	"twitter.com",
 ]`
 
 	client4, client6, stop := initFilters(
@@ -46,42 +49,84 @@ allowedHostnames = [
 
 	is := is.New(t)
 
-	err := makeHTTPReqs(client4, client6, "https://google.com")
-	is.NoErr(err) // request to allowed hostname should succeed
+	t.Run("allowed requests", func(t *testing.T) {
+		err := makeHTTPReqs(client4, client6, "https://google.com")
+		is.NoErr(err) // request to allowed hostname should succeed
 
-	err = makeHTTPReqs(client4, client6, "https://news.google.com")
-	is.NoErr(err) // request to allowed subdomain of hostname should succeed
+		err = makeHTTPReqs(client4, client6, "https://news.google.com")
+		is.NoErr(err) // request to allowed subdomain of hostname should succeed
 
-	// TODO: github.com does not have AAAA record, so this will fail over
-	// IPv6. Find other website that will work here
-	err = makeHTTPReqs(client4, nil, "https://gist.github.com")
-	is.NoErr(err) // request to allowed hostname should succeed
+		// TODO: github.com does not have AAAA record, so this will fail over
+		// IPv6. Find other website that will work here
+		err = makeHTTPReqs(client4, nil, "https://gist.github.com")
+		is.NoErr(err) // request to allowed hostname should succeed
 
-	err = makeHTTPReqs(client4, nil, "https://github.com")
-	is.NoErr(err) // request to allowed hostname from response CNAME should succeed
+		err = makeHTTPReqs(client4, nil, "https://github.com")
+		is.NoErr(err) // request to allowed hostname from response CNAME should succeed
+	})
 
-	err = makeHTTPReqs(client4, client6, "https://microsoft.com")
-	is.True(reqFailed(err)) // request to disallowed hostname should fail
+	t.Run("blocked requests", func(t *testing.T) {
+		err := makeHTTPReqs(client4, client6, "https://microsoft.com")
+		is.True(reqFailed(err)) // request to disallowed hostname should fail
 
-	err = makeHTTPReqs(client4, client6, "https://ggoogle.com")
-	is.True(reqFailed(err)) // test subdomain matching works correctly
+		err = makeHTTPReqs(client4, client6, "https://ggoogle.com")
+		is.True(reqFailed(err)) // test subdomain matching works correctly
 
-	_, err = client4.Get("https://1.1.1.1")
-	is.True(reqFailed(err)) // request to IPv4 IP of disallowed hostname should fail
-	_, err = client6.Get("https://[2606:4700:4700::1111]")
-	is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
+		_, err = client4.Get("https://1.1.1.1")
+		is.True(reqFailed(err)) // request to IPv4 IP of disallowed hostname should fail
+		_, err = client6.Get("https://[2606:4700:4700::1111]")
+		is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
+	})
 
-	addrs4, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", "google.com")
-	is.NoErr(err) // IPv4 lookup of allowed hostname should succeed
-	addrs6, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip6", "google.com")
-	is.NoErr(err) // IPv6 lookup of allowed hostname should succeed
+	t.Run("MX", func(t *testing.T) {
+		mailDomains, err := net.DefaultResolver.LookupMX(getTimeout(t), "twitter.com")
+		is.NoErr(err) // MX request to allowed hostname should succeed
 
-	time.Sleep(4 * time.Second) // wait until IPs should expire
+		for _, mailDomain := range mailDomains {
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", mailDomain.Host)
+			is.NoErr(err) // IPv4 lookup of allowed mail hostname should succeed
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip6", mailDomain.Host)
+			is.NoErr(err) // IPv6 lookup of allowed mail hostname should succeed
+		}
+	})
 
-	_, err = client4.Get("https://" + addrs4[0].Unmap().String())
-	is.True(reqFailed(err)) // request to expired IPv4 IP should fail
-	_, err = client6.Get("https://[" + addrs6[0].Unmap().String() + "]")
-	is.True(reqFailed(err)) // request to expired IPv6 IP should fail
+	t.Run("NS", func(t *testing.T) {
+		nameServers, err := net.DefaultResolver.LookupNS(getTimeout(t), "facebook.com")
+		is.NoErr(err) // NS request to allowed hostname should succeed
+
+		for _, nameServer := range nameServers {
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", nameServer.Host)
+			is.NoErr(err) // IPv4 lookup of allowed name server should succeed
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip6", nameServer.Host)
+			is.NoErr(err) // IPv6 lookup of allowed name server should succeed
+		}
+	})
+
+	t.Run("SRV", func(t *testing.T) {
+		_, servers, err := net.DefaultResolver.LookupSRV(getTimeout(t), "https", "tcp", "deb.debian.org")
+		is.NoErr(err) // SRV request to allowed hostname should succeed
+
+		for _, server := range servers {
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", server.Target)
+			is.NoErr(err) // IPv4 lookup of allowed server should succeed
+			_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip6", server.Target)
+			is.NoErr(err) // IPv6 lookup of allowed server should succeed
+		}
+	})
+
+	t.Run("expired IP", func(t *testing.T) {
+		addrs4, err := net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "google.com")
+		is.NoErr(err) // IPv4 lookup of allowed hostname should succeed
+		addrs6, err := net.DefaultResolver.LookupNetIP(getTimeout(t), "ip6", "google.com")
+		is.NoErr(err) // IPv6 lookup of allowed hostname should succeed
+
+		time.Sleep(4 * time.Second) // wait until IPs should expire
+
+		_, err = client4.Get("https://" + addrs4[0].Unmap().String())
+		is.True(reqFailed(err)) // request to expired IPv4 IP should fail
+		_, err = client6.Get("https://[" + addrs6[0].Unmap().String() + "]")
+		is.True(reqFailed(err)) // request to expired IPv6 IP should fail
+	})
 }
 
 func TestAllowAll(t *testing.T) {
@@ -132,10 +177,8 @@ cachedHostnames = [
 ]`
 
 	is := is.New(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	t.Cleanup(cancel)
 
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", "digitalocean.com")
+	addrs, err := net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "digitalocean.com")
 	is.NoErr(err)
 
 	client4, _, stop := initFilters(
@@ -166,7 +209,7 @@ cachedHostnames = [
 		resp.Body.Close()
 	}
 
-	_, err = net.DefaultResolver.LookupNetIP(ctx, "ip4", "microsoft.com")
+	_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "microsoft.com")
 	is.True(reqFailed(err)) // lookup of disallowed domain should fail
 }
 
@@ -201,4 +244,11 @@ func reqFailed(err error) bool {
 	}
 
 	return false
+}
+
+func getTimeout(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+
+	return ctx
 }

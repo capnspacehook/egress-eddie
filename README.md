@@ -30,15 +30,15 @@ a suffix. For example, if `google.com` is an allowed hostname, DNS requests for
 `blog.google.com`, `groups.google.com`, and `google.com` would all be allowed.
 
 Accepted DNS answers of type `A` and `AAAA` cause the contained IPs to be allowed. DNS answers of type
-`CNAME` and `SRV` cause the contained hostnames to be allowed to be queried. All other accepted DNS
-answer types are passed through to the sender with no action taken by Egress Eddie.
+`CNAME`, `SRV`, `MX` and `NS` cause the contained hostnames to be allowed to be queried. All other accepted
+DNS answer types are passed through to the sender with no action taken by Egress Eddie.
 
 Normal traffic is only parsed up to the network layer (`IPv4` or `IPv6`). The source and destination
 IP addresses are inspected to ensure they match IPs returned from accepted DNS answers.
 
 ## Security
 
-Egress Eddie leverages `seccomp` to ensure that it will only use a handful of syscalls (default 25)
+Egress Eddie leverages `seccomp` to ensure that it will only use a handful of syscalls (default 28)
 with filtered arguments. This makes it very difficult for an attacker to do anything of value if
 they are somehow able to execute code in the context of a running Egress Eddie process.
 
