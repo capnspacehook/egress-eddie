@@ -702,17 +702,17 @@ allowAllHostnames = true`,
 	{
 		testName: "valid cachedHostnames",
 		configStr: `
-	inboundDNSQueue.ipv4 = 1
-	selfDNSQueue.ipv4 = 100
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
 
-	[[filters]]
-	name = "foo"
-	trafficQueue.ipv4 = 1001
-	reCacheEvery = "1s"
-	cachedHostnames = [
-		"oof",
-		"rab",
-	]`,
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+reCacheEvery = "1s"
+cachedHostnames = [
+	"oof",
+	"rab",
+]`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -749,13 +749,13 @@ allowAllHostnames = true`,
 	{
 		testName: "valid lookupUnknownIPs",
 		configStr: `
-	inboundDNSQueue.ipv4 = 1
-	selfDNSQueue.ipv4 = 100
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
 
-	[[filters]]
-	name = "foo"
-	trafficQueue.ipv4 = 1001
-	lookupUnknownIPs = true`,
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+lookupUnknownIPs = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -788,24 +788,24 @@ allowAllHostnames = true`,
 	{
 		testName: "valid allowedHostnames and cachedHostnames",
 		configStr: `
-	inboundDNSQueue.ipv4 = 1
-	selfDNSQueue.ipv4 = 100
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
 
-	[[filters]]
-	name = "foo"
-	dnsQueue.ipv4 = 1000
-	trafficQueue.ipv4 = 1001
-	reCacheEvery = "1s"
-	cachedHostnames = [
-		"oof",
-		"rab",
-	]
-	allowAnswersFor = "5s"
-	allowedHostnames = [
-		"foo",
-		"bar",
-		"baz.barf",
-	]`,
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+reCacheEvery = "1s"
+cachedHostnames = [
+	"oof",
+	"rab",
+]
+allowAnswersFor = "5s"
+allowedHostnames = [
+	"foo",
+	"bar",
+	"baz.barf",
+]`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -851,20 +851,20 @@ allowAllHostnames = true`,
 	{
 		testName: "valid lookupUnknownIPs",
 		configStr: `
-	inboundDNSQueue.ipv4 = 1
-	selfDNSQueue.ipv4 = 100
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
 
-	[[filters]]
-	name = "foo"
-	dnsQueue.ipv4 = 1000
-	trafficQueue.ipv4 = 1001
-	lookupUnknownIPs = true
-	allowAnswersFor = "5s"
-	allowedHostnames = [
-		"foo",
-		"bar",
-		"baz.barf",
-	]`,
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+lookupUnknownIPs = true
+allowAnswersFor = "5s"
+allowedHostnames = [
+	"foo",
+	"bar",
+	"baz.barf",
+]`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -906,25 +906,25 @@ allowAllHostnames = true`,
 	{
 		testName: "valid lookupUnknownIPs is set and cachedHostnames is not empty",
 		configStr: `
-	inboundDNSQueue.ipv4 = 1
-	selfDNSQueue.ipv4 = 100
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
 
-	[[filters]]
-	name = "foo"
-	dnsQueue.ipv4 = 1000
-	trafficQueue.ipv4 = 1001
-	lookupUnknownIPs = true
-	reCacheEvery = "1s"
-	cachedHostnames = [
-		"oof",
-		"rab",
-	]
-	allowAnswersFor = "5s"
-	allowedHostnames = [
-		"foo",
-		"bar",
-		"baz.barf",
-	]`,
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+lookupUnknownIPs = true
+reCacheEvery = "1s"
+cachedHostnames = [
+	"oof",
+	"rab",
+]
+allowAnswersFor = "5s"
+allowedHostnames = [
+	"foo",
+	"bar",
+	"baz.barf",
+]`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -965,6 +965,118 @@ allowAllHostnames = true`,
 						"oof",
 						"rab",
 					},
+				},
+			},
+		},
+		expectedErr: "",
+	},
+	{
+		testName: "valid multiple filters",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+inboundDNSQueue.ipv6 = 10
+selfDNSQueue.ipv4 = 100
+selfDNSQueue.ipv6 = 110
+
+[[filters]]
+name = "test1"
+dnsQueue.ipv4 = 1000
+dnsQueue.ipv6 = 1010
+trafficQueue.ipv4 = 1001
+trafficQueue.ipv6 = 1011
+allowAnswersFor = "5s"
+allowedHostnames = [
+	"foo",
+	"bar",
+]
+
+[[filters]]
+name = "test2"
+trafficQueue.ipv4 = 2010
+trafficQueue.ipv6 = 2011
+lookupUnknownIPs = true
+
+[[filters]]
+name = "test3"
+trafficQueue.ipv4 = 3001
+trafficQueue.ipv6 = 3011
+reCacheEvery = "1s"
+cachedHostnames = [
+	"oof",
+	"rab",
+]
+
+[[filters]]
+name = "test4"
+dnsQueue.ipv4 = 4000
+dnsQueue.ipv6 = 4010
+allowAllHostnames = true`,
+		expectedConfig: &Config{
+			InboundDNSQueue: queue{
+				IPv4: 1,
+				IPv6: 10,
+			},
+			SelfDNSQueue: queue{
+				IPv4: 100,
+				IPv6: 110,
+			},
+			Filters: []FilterOptions{
+				{
+					Name: "self-filter",
+					DNSQueue: queue{
+						IPv4: 100,
+						IPv6: 110,
+					},
+					AllowedHostnames: []string{
+						"in-addr.arpa",
+						"ip6.arpa",
+						"oof",
+						"rab",
+					},
+				},
+				{
+					Name: "test1",
+					DNSQueue: queue{
+						IPv4: 1000,
+						IPv6: 1010,
+					},
+					TrafficQueue: queue{
+						IPv4: 1001,
+						IPv6: 1011,
+					},
+					AllowAnswersFor: duration(5 * time.Second),
+					AllowedHostnames: []string{
+						"foo",
+						"bar",
+					},
+				},
+				{
+					Name: "test2",
+					TrafficQueue: queue{
+						IPv4: 2010,
+						IPv6: 2011,
+					},
+					LookupUnknownIPs: true,
+				},
+				{
+					Name: "test3",
+					TrafficQueue: queue{
+						IPv4: 3001,
+						IPv6: 3011,
+					},
+					ReCacheEvery: duration(time.Second),
+					CachedHostnames: []string{
+						"oof",
+						"rab",
+					},
+				},
+				{
+					Name: "test4",
+					DNSQueue: queue{
+						IPv4: 4000,
+						IPv6: 4010,
+					},
+					AllowAllHostnames: true,
 				},
 			},
 		},
