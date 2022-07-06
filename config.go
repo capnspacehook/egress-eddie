@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	_ "unsafe"
 
 	"github.com/BurntSushi/toml"
 )
@@ -202,6 +203,18 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedHostnames" is empty`, filterOpt.Name)
 		}
 
+		// TODO: test
+		for _, name := range filterOpt.AllowedHostnames {
+			if !validDomainName(name) {
+				return nil, fmt.Errorf(`filter %q: allowed hostname %q is not a valid domain name`, filterOpt.Name, name)
+			}
+		}
+		for _, name := range filterOpt.CachedHostnames {
+			if !validDomainName(name) {
+				return nil, fmt.Errorf(`filter %q: hostname to be cached %q is not a valid domain name`, filterOpt.Name, name)
+			}
+		}
+
 		if idx, ok := filterNames[filterOpt.Name]; ok {
 			return nil, fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
 		}
@@ -305,3 +318,21 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 	return &config, nil
 }
+
+func validDomainName(dn string) bool {
+	if !isDomainName(dn) {
+		return false
+	}
+	// A domain name ending with a dot is technically allowed (I think),
+	// but because seemingly all DNS clients chop off the trailing dot
+	// when making DNS requests, Egress Eddie can't properly validate
+	// these domains. For simplicity, don't allow them.
+	if dn[len(dn)-1] == '.' {
+		return false
+	}
+
+	return true
+}
+
+//go:linkname isDomainName net.isDomainName
+func isDomainName(s string) bool

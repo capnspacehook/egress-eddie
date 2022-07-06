@@ -110,6 +110,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}
+	// TODO: block until seccomp filters are set
 	logger.Info("started filtering")
 
 	defer func() {

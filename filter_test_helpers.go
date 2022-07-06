@@ -12,7 +12,9 @@ import (
 )
 
 func getHTTPClients() (*http.Client, *http.Client) {
-	var dialer net.Dialer
+	dialer := net.Dialer{
+		FallbackDelay: -1,
+	}
 	tp4 := &http.Transport{
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "tcp4", addr)

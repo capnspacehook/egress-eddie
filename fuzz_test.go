@@ -2,19 +2,29 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/florianl/go-nfqueue"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 	"go.uber.org/zap"
 )
 
 var (
-	dnsReq4  = []byte("E\\x00\\x008\\v\\x97@\\x00@\\x110\\xe8\\u007f\\x00\\x00\\x01\\u007f\\x00\\x005\\xa2\\xcf\\x005\\x00$\\xb0\\x16\\x9a\\x9b\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x06google\\x03com\\x00\\x00\\x01\\x00\\x01")
-	dnsReq6  = []byte("`\\x00\\xeb>\\x00/\\x11@\\xfe\\x80\\x00\\x00\\x00\\x00\\x00\\x00d>\\xc1\\xc2\\xc1\\x8d\\x02\\xd4\\xfe\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\fk\\xff\\xfe\\xac\\xfc\\xe0\\xddr\\x005\\x00/\\xccN\\x1d\\xdc\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x01\\x06google\\x03com\\x00\\x00\\x01\\x00\\x01\\x00\\x00)\\x05\\xac\\x00\\x00\\x00\\x00\\x00\\x00")
-	dnsResp4 = []byte("E\\x00\\x00\\x98M\\b@\\x00\\x01\\x11.\\x17\\u007f\\x00\\x005\\u007f\\x00\\x00\\x01\\x005\\xa2\\xcf\\x00\\x84\\x16+\\x9a\\x9b\\x81\\x80\\x00\\x01\\x00\\x06\\x00\\x00\\x00\\x00\\x06google\\x03com\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\t\\x8a\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\td\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\te\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\t\\x8b\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\tf\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\tq")
-	dnsResp6 = []byte("`\\x00\\x00\\x00\\x00\\x8f\\x11@\\xfe\\x80\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\fk\\xff\\xfe\\xac\\xfc\\xe0\\xfe\\x80\\x00\\x00\\x00\\x00\\x00\\x00d>\\xc1\\xc2\\xc1\\x8d\\x02\\xd4\\x005\\xddr\\x00\\x8f\\x0ed\\x1d܁\\x80\\x00\\x01\\x00\\x06\\x00\\x00\\x00\\x01\\x06google\\x03com\\x00\\x00\\x01\\x00\\x01\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\t\\x8a\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\td\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\te\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\t\\x8b\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\tf\\xc0\\f\\x00\\x01\\x00\\x01\\x00\\x00\\x00\\xf0\\x00\\x04\\x8e\\xfa\\tq\\x00\\x00)\\x04\\xd0\\x00\\x00\\x00\\x00\\x00\\x00")
-	traffic4 = []byte("E\\x00\\x00<5\\x02@\\x00@\\x06\\xab\\x84\\xc0\\xa8\\x01\\t\\x8e\\xfa\\t\\x8a\\xac\\xd6\\x01\\xbb\\xb7\\xda\\xed\\xe2\\x00\\x00\\x00\\x00\\xa0\\x02\\xfa\\xf0F\\x1b\\x00\\x00\\x02\\x04\\x05\\xb4\\x04\\x02\\b\\n?\\xdf\\x18\\x90\\x00\\x00\\x00\\x00\\x01\\x03\\x03\\a")
-	traffic6 = []byte("`\\t\\x0e\\xb7\\x00(\\x06@&\\x01\\x01\\x00\\x81\\u007ft\\xf8R\\xe5K\\xa5=F\\x8a\\x05&\\a\\xf8\\xb0@\\x02\\b\\x17\\x00\\x00\\x00\\x00\\x00\\x00 \\x0e\\xeb\\x16\\x01\\xbb\\x9a\\xe1\\xec\\xdd\\x00\\x00\\x00\\x00\\xa0\\x02\\xfd \\xd5\\u007f\\x00\\x00\\x02\\x04\\x05\\xa0\\x04\\x02\\b\\n N\\xd6e\\x00\\x00\\x00\\x00\\x01\\x03\\x03\\a")
+	debugLogging = true
+	dumpPackets  = false
+
+	ipv4Localhost  = netip.MustParseAddr("127.0.0.1").AsSlice()
+	ipv6Localhost  = netip.MustParseAddr("::1").AsSlice()
+	ipv4Answer     = netip.MustParseAddr("1.2.3.4").AsSlice()
+	ipv6Answer     = netip.MustParseAddr("::1:2:3:4").AsSlice()
+	ipv4Disallowed = netip.MustParseAddr("4.3.2.1").AsSlice()
+	ipv6Disallowed = netip.MustParseAddr("::4:3:2:1").AsSlice()
+	trafficPayload = gopacket.Payload([]byte("https://bit.ly/3aeUqbo"))
 )
 
 func FuzzConfig(f *testing.F) {
@@ -23,6 +33,13 @@ func FuzzConfig(f *testing.F) {
 	}
 
 	logger := zap.NewNop()
+	if debugLogging {
+		var err error
+		logger, err = zap.NewDevelopment()
+		if err != nil {
+			f.Fatalf("error creating logger: %v", err)
+		}
+	}
 
 	f.Fuzz(func(t *testing.T, cb []byte) {
 		config, err := parseConfigBytes(cb)
@@ -34,67 +51,377 @@ func FuzzConfig(f *testing.F) {
 		config.enforcerCreator = newMockEnforcer
 		config.resolver = &mockResolver{}
 
-		// test that a config that passes valdiation won't cause a
+		// test that a config that passes validation won't cause a
 		// error/panic when starting filters
 		ctx, cancel := context.WithCancel(context.Background())
 		f, err := StartFilters(ctx, logger, config)
 		if err != nil {
-			t.Errorf("config:\n---\n%s\n---\n\nerr: %v", cb, err)
+			failAndDumpConfig(t, cb, "error starting filters: %v", err)
 		}
 
 		// test that sending DNS requests, DNS responses, and traffic
-		// will not cause a panic
+		// will not cause a panic and behaves as expected
 		for _, filter := range config.Filters {
-			if filter.DNSQueue.eitherSet() {
-				if n := filter.DNSQueue.IPv4; n != 0 {
-					mockEnforcers[n].hook(nfqueue.Attribute{
-						PacketID: ref(uint32(1000)),
-						CtInfo:   ref(uint32(stateNew)),
-						Payload:  ref(dnsReq4),
-					})
+			// TODO: handle cached hostnames and reverse lookups
+			if len(filter.AllowedHostnames) == 0 && !filter.AllowAllHostnames {
+				continue
+			}
 
+			allowedName := "google.com"
+			if len(filter.AllowedHostnames) > 0 {
+				allowedName = filter.AllowedHostnames[0]
+			}
+			// TODO: ensure this won't collide with another allowed hostname
+			disallowedName := "no" + allowedName + "no"
+
+			if filter.DNSQueue.eitherSet() {
+				// send DNS request of allowed domain name
+				if n := filter.DNSQueue.IPv4; n != 0 {
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    false,
+						srcPort: 1000,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+								},
+							},
+						},
+						connState:       stateNew,
+						expectedVerdict: nfqueue.NfAccept,
+					})
+					// send DNS request of allowed domain name on disallowed connection state
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    false,
+						srcPort: 1001,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+								},
+							},
+						},
+						connState:       stateUntracked,
+						expectedVerdict: nfqueue.NfDrop,
+					})
+					// send DNS reply of allowed domain name on DNS request queue
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    false,
+						srcPort: 1001,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+								},
+							},
+							ANCount: 1,
+							Answers: []layers.DNSResourceRecord{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+									IP:    ipv4Answer,
+								},
+							},
+						},
+						connState:       stateNew,
+						expectedVerdict: nfqueue.NfDrop,
+					})
+					if !filter.AllowAllHostnames {
+						// send DNS request of disallowed domain name
+						sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+							ipv6:    false,
+							srcPort: 1001,
+							dstPort: 53,
+							finalLayer: &layers.DNS{
+								QDCount: 1,
+								Questions: []layers.DNSQuestion{
+									{
+										Name:  []byte(disallowedName),
+										Type:  layers.DNSTypeA,
+										Class: layers.DNSClassIN,
+									},
+								},
+							},
+							connState:       stateNew,
+							expectedVerdict: nfqueue.NfDrop,
+						})
+					}
 				}
 				if n := filter.DNSQueue.IPv6; n != 0 {
-					mockEnforcers[n].hook(nfqueue.Attribute{
-						PacketID: ref(uint32(1010)),
-						CtInfo:   ref(uint32(stateNew)),
-						Payload:  ref(dnsReq6),
+					// send DNS request of allowed domain name
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    true,
+						srcPort: 1010,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeAAAA,
+									Class: layers.DNSClassIN,
+								},
+							},
+						},
+						connState:       stateNew,
+						expectedVerdict: nfqueue.NfAccept,
 					})
+					// send DNS request of allowed domain name on disallowed connection state
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    true,
+						srcPort: 1011,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeAAAA,
+									Class: layers.DNSClassIN,
+								},
+							},
+						},
+						connState:       stateUntracked,
+						expectedVerdict: nfqueue.NfDrop,
+					})
+					// send DNS reply of allowed domain name on DNS request queue
+					sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+						ipv6:    true,
+						srcPort: 1011,
+						dstPort: 53,
+						finalLayer: &layers.DNS{
+							QDCount: 1,
+							Questions: []layers.DNSQuestion{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeAAAA,
+									Class: layers.DNSClassIN,
+								},
+							},
+							ANCount: 1,
+							Answers: []layers.DNSResourceRecord{
+								{
+									Name:  []byte(allowedName),
+									Type:  layers.DNSTypeA,
+									Class: layers.DNSClassIN,
+									IP:    ipv6Answer,
+								},
+							},
+						},
+						connState:       stateNew,
+						expectedVerdict: nfqueue.NfDrop,
+					})
+					if !filter.AllowAllHostnames {
+						// send DNS request of disallowed domain name
+						sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+							ipv6:    true,
+							srcPort: 1011,
+							dstPort: 53,
+							finalLayer: &layers.DNS{
+								QDCount: 1,
+								Questions: []layers.DNSQuestion{
+									{
+										Name:  []byte(disallowedName),
+										Type:  layers.DNSTypeAAAA,
+										Class: layers.DNSClassIN,
+									},
+								},
+							},
+							connState:       stateNew,
+							expectedVerdict: nfqueue.NfDrop,
+						})
+					}
 				}
+			}
+
+			// If answers are allowed for too short of a time, we don't
+			// want to race against the connection getting forgotten.
+			// The self filter only processes DNS responses so it won't
+			// have an allowed answers duration set.
+			if filter.DNSQueue != config.SelfDNSQueue && time.Duration(filter.AllowAnswersFor) < time.Millisecond {
+				continue
 			}
 
 			if n := config.InboundDNSQueue.IPv4; n != 0 {
-				mockEnforcers[n].hook(nfqueue.Attribute{
-					PacketID: ref(uint32(1)),
-					CtInfo:   ref(uint32(stateEstablished)),
-					Payload:  ref(dnsResp4),
+				// send DNS reply of allowed domain name
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:    false,
+					srcPort: 53,
+					dstPort: 1000,
+					finalLayer: &layers.DNS{
+						QDCount: 1,
+						Questions: []layers.DNSQuestion{
+							{
+								Name:  []byte(allowedName),
+								Type:  layers.DNSTypeA,
+								Class: layers.DNSClassIN,
+							},
+						},
+						ANCount: 1,
+						Answers: []layers.DNSResourceRecord{
+							{
+								Name:  []byte(allowedName),
+								Type:  layers.DNSTypeA,
+								Class: layers.DNSClassIN,
+								IP:    ipv4Answer,
+							},
+						},
+					},
+					connState: stateEstablished,
+					// if no dns queue is set, the DNS request won't have
+					// been set so this should fail
+					expectedVerdict: boolToVerdict(filter.DNSQueue.eitherSet()),
 				})
 			}
 			if n := config.InboundDNSQueue.IPv6; n != 0 {
-				mockEnforcers[n].hook(nfqueue.Attribute{
-					PacketID: ref(uint32(10)),
-					CtInfo:   ref(uint32(stateEstablished)),
-					Payload:  ref(dnsResp6),
+				// send DNS reply of allowed domain name
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:    true,
+					srcPort: 53,
+					dstPort: 1010,
+					finalLayer: &layers.DNS{
+						QDCount: 1,
+						Questions: []layers.DNSQuestion{
+							{
+								Name:  []byte(allowedName),
+								Type:  layers.DNSTypeAAAA,
+								Class: layers.DNSClassIN,
+							},
+						},
+						ANCount: 1,
+						Answers: []layers.DNSResourceRecord{
+							{
+								Name:  []byte(allowedName),
+								Type:  layers.DNSTypeAAAA,
+								Class: layers.DNSClassIN,
+								IP:    ipv6Answer,
+							},
+						},
+					},
+					connState: stateEstablished,
+					// if no dns queue is set, the DNS request won't have
+					// been set so this should fail
+					expectedVerdict: boolToVerdict(filter.DNSQueue.eitherSet()),
 				})
 			}
 		}
+
 		for _, filter := range config.Filters {
 			if !filter.TrafficQueue.eitherSet() {
 				continue
 			}
 
+			// TODO: flip src/dst, test reverse lookups
+			allowVerdict := filter.DNSQueue.eitherSet() && time.Duration(filter.AllowAnswersFor) >= time.Millisecond
 			if n := filter.TrafficQueue.IPv4; n != 0 {
-				mockEnforcers[n].hook(nfqueue.Attribute{
-					PacketID: ref(uint32(1001)),
-					CtInfo:   ref(uint32(stateNew)),
-					Payload:  ref(traffic4),
+				// send traffic with allowed dst IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            false,
+					srcIP:           ipv4Localhost,
+					dstIP:           ipv4Answer,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: boolToVerdict(allowVerdict),
+				})
+
+				// send traffic with allowed src IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            false,
+					srcIP:           ipv4Answer,
+					dstIP:           ipv4Localhost,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: boolToVerdict(allowVerdict),
+				})
+
+				// send traffic with disallowed dst IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            false,
+					srcIP:           ipv4Localhost,
+					dstIP:           ipv4Disallowed,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: nfqueue.NfDrop,
+				})
+
+				// send traffic with disallowed src IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            false,
+					srcIP:           ipv4Disallowed,
+					dstIP:           ipv4Localhost,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: nfqueue.NfDrop,
 				})
 			}
 			if n := filter.TrafficQueue.IPv6; n != 0 {
-				mockEnforcers[n].hook(nfqueue.Attribute{
-					PacketID: ref(uint32(1011)),
-					CtInfo:   ref(uint32(stateNew)),
-					Payload:  ref(traffic6),
+				// send traffic with allowed dst IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            true,
+					srcIP:           ipv6Localhost,
+					dstIP:           ipv6Answer,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: boolToVerdict(allowVerdict),
+				})
+
+				// send traffic with allowed src IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            true,
+					srcIP:           ipv6Answer,
+					dstIP:           ipv6Localhost,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: boolToVerdict(allowVerdict),
+				})
+
+				// send traffic with disallowed dst IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            true,
+					srcIP:           ipv6Localhost,
+					dstIP:           ipv6Disallowed,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: nfqueue.NfDrop,
+				})
+
+				// send traffic with disallowed src IP
+				sendPacket(t, logger, cb, mockEnforcers[n], sendOpts{
+					ipv6:            true,
+					srcIP:           ipv6Disallowed,
+					dstIP:           ipv6Localhost,
+					srcPort:         1337,
+					dstPort:         420,
+					finalLayer:      trafficPayload,
+					connState:       stateNew,
+					expectedVerdict: nfqueue.NfDrop,
 				})
 			}
 		}
@@ -102,6 +429,122 @@ func FuzzConfig(f *testing.F) {
 		cancel()
 		f.Stop()
 	})
+}
+
+func failAndDumpConfig(t *testing.T, cb []byte, format string, a ...any) {
+	t.Logf("config:\n---\n%s\n---\n\n", cb)
+	panic(fmt.Sprintf(format, a...))
+}
+
+func boolToVerdict(b bool) int {
+	v := nfqueue.NfDrop
+	if b {
+		v = nfqueue.NfAccept
+	}
+
+	return v
+}
+
+type sendOpts struct {
+	ipv6            bool
+	srcIP           net.IP
+	dstIP           net.IP
+	srcPort         uint16
+	dstPort         uint16
+	finalLayer      gopacket.SerializableLayer
+	connState       int
+	expectedVerdict int
+}
+
+var (
+	ipv4DNSLayer = &layers.IPv4{
+		Protocol: layers.IPProtocolUDP,
+		SrcIP:    ipv4Localhost,
+		DstIP:    ipv4Localhost,
+	}
+	ipv6DNSLayer = &layers.IPv6{
+		NextHeader: layers.IPProtocolUDP,
+		SrcIP:      ipv6Localhost,
+		DstIP:      ipv6Localhost,
+	}
+	buf           = gopacket.NewSerializeBuffer()
+	serializeOpts = gopacket.SerializeOptions{
+		FixLengths: true,
+	}
+	packetID = uint32(1)
+)
+
+func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, opts sendOpts) {
+	var (
+		ipLayer     gopacket.SerializableLayer = ipv4DNSLayer
+		ipLayerType                            = layers.IPProtocolIPv4
+	)
+	if opts.ipv6 {
+		ipLayer = ipv6DNSLayer
+		ipLayerType = layers.IPProtocolIPv6
+	}
+
+	// set the src and dst IPs for traffic packets
+	if opts.srcIP != nil || opts.dstIP != nil {
+		if !opts.ipv6 {
+			ipLayer = &layers.IPv4{
+				Protocol: layers.IPProtocolUDP,
+				SrcIP:    opts.srcIP,
+				DstIP:    opts.dstIP,
+			}
+		} else {
+			ipLayer = &layers.IPv6{
+				NextHeader: layers.IPProtocolUDP,
+				SrcIP:      opts.srcIP,
+				DstIP:      opts.dstIP,
+			}
+		}
+	}
+
+	err := gopacket.SerializeLayers(buf, serializeOpts,
+		ipLayer,
+		&layers.UDP{
+			SrcPort: layers.UDPPort(opts.srcPort),
+			DstPort: layers.UDPPort(opts.dstPort),
+		},
+		opts.finalLayer,
+	)
+	if err != nil {
+		failAndDumpConfig(t, cb, "error serializing packet: %v", err)
+	}
+
+	debugLog(logger, "sending packet: ipv6=%t srcPort=%d dstPort=%d connState=%d verdict=%d",
+		opts.ipv6,
+		opts.srcPort,
+		opts.dstPort,
+		opts.connState,
+		opts.expectedVerdict,
+	)
+	if dumpPackets {
+		packet := gopacket.NewPacket(buf.Bytes(), ipLayerType, gopacket.Default)
+		debugLog(logger, packet.Dump())
+	}
+
+	e.hook(nfqueue.Attribute{
+		PacketID: ref(packetID),
+		CtInfo:   ref(uint32(opts.connState)),
+		Payload:  ref(buf.Bytes()),
+	})
+	verdict, ok := e.verdicts[packetID]
+	if !ok {
+		failAndDumpConfig(t, cb, "packet did not receive a verdict")
+	}
+	if verdict != opts.expectedVerdict {
+		failAndDumpConfig(t, cb, "expected verdict %d got %d", opts.expectedVerdict, verdict)
+	}
+
+	packetID++
+}
+
+func debugLog(logger *zap.Logger, format string, a ...any) {
+	if debugLogging {
+		logger.Sugar().Infof(format, a...)
+	}
 }
 
 func ref[T any](t T) *T {
