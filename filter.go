@@ -658,6 +658,15 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			if !connFilter.isSelfFilter && dns.ANCount > 0 {
 				ttl := time.Duration(connFilter.opts.AllowAnswersFor)
 				for _, answer := range dns.Answers {
+					aName := string(answer.Name)
+					if !connFilter.hostnameAllowed(aName) {
+						logger.Info("dropping DNS reply", zap.ByteString("answer", answer.Name))
+						if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
+							logger.Error("error setting verdict", zap.NamedError("error", err))
+						}
+						return 0
+					}
+
 					if answer.Type == layers.DNSTypeA || answer.Type == layers.DNSTypeAAAA {
 						// temporarily add A and AAAA answers to
 						// allowed IP list
