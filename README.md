@@ -138,23 +138,20 @@ numbers to open and use. Here's a simple config that only allows traffic to `git
 using the same nfqueue numbers that were set in iptables rules above:
 
 ```toml
-inboundDNSQueue = 1
-ipv6 = false
+inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "example"
-dnsQueue = 1000
-trafficQueue = 1001
-ipv6 = false
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
 allowAnswersFor = "5m"
 allowedHostnames = [
     "github.com",
 ]
 ```
 
-The nfqueue number for DNS responses is set to 1, and `ipv6` is set to `false` as we are
-filtering `IPv4` traffic. If you are filtering `IPv6` traffic and using ip6tables, set
-that to `true`.
+If you are filtering `IPv6` traffic and using ip6tables, set `inboundDNSQueue.ipv6`,
+`dnsQueue.ipv6`, and `trafficQueue.ipv4`.
 
 Next we create a filter, setting the nfqueue numbers used for DNS requests and traffic
 that we want filtered. The `name` of each filter is simply an identifier that will allow
@@ -162,8 +159,7 @@ you to more easily read or search through Egress Eddie's logs.
 
 `allowAnswersFor` controls how long IPs and hostnames returned
 from DNS responses are allowed for. The syntax for specifying a duration is the 
-[Go duration syntax](https://pkg.go.dev/time#ParseDuration). If `allowAnswersFor` is
-not set, it defaults to the TTL of the DNS response.
+[Go duration syntax](https://pkg.go.dev/time#ParseDuration).
 
 Finally `allowedHostnames` controls the hostnames that are allowed, which here is just `github.com`.
 
@@ -209,15 +205,13 @@ iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queu
 config file:
 
 ```toml
-inboundDNSQueue = 1
-ipv6 = false
+inboundDNSQueue.ipv4 = 1
 
 # filter apt updating
 [[filters]]
 name = "apt updating"
-dnsQueue = 1000
-trafficQueue = 1001
-ipv6 = false
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
 allowAnswersFor = "30m"
 allowedHostnames = [
     "deb.debian.org",
@@ -227,9 +221,8 @@ allowedHostnames = [
 # filter go module traffic
 [[filters]]
 name = "go modules"
-dnsQueue = 2000
-trafficQueue = 2001
-ipv6 = false
+dnsQueue.ipv4 = 2000
+trafficQueue.ipv4 = 2001
 allowAnswersFor = "5m"
 allowedHostnames = [
     "proxy.golang.org",
@@ -239,7 +232,6 @@ allowedHostnames = [
 # allow all root DNS requests
 [[filters]]
 name = "root allow all"
-dnsQueue = 3000
-ipv6 = false
+dnsQueue.ipv4 = 3000
 allowAllHostnames = true
 ```
