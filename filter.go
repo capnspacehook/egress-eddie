@@ -416,8 +416,7 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 
 		// drop DNS replies, they shouldn't be going to this filter
 		if dns.ANCount > 0 {
-			logger.Warn("dropping DNS reply sent to DNS request filter")
-
+			logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
 			}
@@ -427,13 +426,14 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
 		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(logger, dns) {
+			logger.Warn("dropping DNS request", dnsFields(dns)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
-		logger.Info("allowing DNS request", zap.Strings("questions", questionStrings(dns.Questions)))
+		logger.Info("allowing DNS request", dnsFields(dns)...)
 
 		// give DNS connections a minute to finish max
 		logger.Debug("adding connection")
@@ -535,7 +535,6 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 		// hostname
 		qName := string(dns.Questions[i].Name)
 		if !f.hostnameAllowed(qName) {
-			logger.Info("dropping DNS request", zap.ByteString("question", dns.Questions[i].Name))
 			return false
 		}
 	}
@@ -557,15 +556,6 @@ func (f *filter) hostnameAllowed(hostname string) bool {
 	}
 
 	return f.additionalHostnames.EntryExists(hostname)
-}
-
-func questionStrings(dnsQs []layers.DNSQuestion) []string {
-	questions := make([]string, len(dnsQs))
-	for i := range dnsQs {
-		questions[i] = string(dnsQs[i].Name) + ": " + dnsQs[i].Type.String()
-	}
-
-	return questions
 }
 
 func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
@@ -633,7 +623,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			}
 		}
 		if connFilter == nil {
-			logger.Warn("dropping DNS response from unknown connection", zap.Strings("questions", questionStrings(dns.Questions)))
+			logger.Warn("dropping DNS response from unknown connection", dnsFields(dns)...)
 
 			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
@@ -653,6 +643,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// block requests for disallowed hostnames but it doesn't
 			// hurt to check
 			if !connFilter.validateDNSQuestions(logger, dns) {
+				logger.Info("dropping DNS request", dnsFields(dns)...)
 				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.NamedError("error", err))
 				}
@@ -682,8 +673,8 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 							continue
 						}
 
-						logger.Info("allowing IP from DNS reply", zap.Stringer("answer.ip", ip), zap.Stringer("answer.type", answer.Type), zap.Duration("answer.ttl", ttl))
 						connFilter.allowedIPs.AddEntry(ip, ttl)
+						// TODO: add IPv4-mapped IPv6 addr
 					case layers.DNSTypeCNAME, layers.DNSTypeSRV, layers.DNSTypeMX, layers.DNSTypeNS:
 						// temporarily add CNAME, SRV, MX, and NS answers to allowed
 						// hostnames list
@@ -699,7 +690,6 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 							name = answer.NS
 						}
 
-						logger.Info("allowing hostname from DNS reply", zap.ByteString("answer.name", name), zap.Stringer("answer.type", answer.Type), zap.Duration("answer.ttl", ttl))
 						connFilter.additionalHostnames.AddEntry(string(name), ttl)
 					default:
 						// don't need to specifically handle other answer
@@ -710,6 +700,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			}
 		}
 
+		logger.Info("allowing DNS reply", dnsFields(dns)...)
 		if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 		}
