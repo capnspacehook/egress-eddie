@@ -316,7 +316,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 			}
 
 			for i := range addrs {
-				logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
+				logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]))
 				f.allowedIPs.AddEntry(addrs[i], ttl)
 
 				// If the IP address is an IPv4-mapped IPv6 address,
@@ -324,7 +324,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 				// will most likely be used.
 				if addrs[i].Is4In6() {
 					addrs[i] = addrs[i].Unmap()
-					logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]), zap.Duration("ttl", ttl))
+					logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]))
 					f.allowedIPs.AddEntry(addrs[i], ttl)
 				}
 			}
@@ -422,7 +422,7 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		logger := logger.With(zap.Stringer("conn.id", connID))
 
 		// drop DNS replies, they shouldn't be going to this filter
-		if dns.ANCount > 0 {
+		if dns.QR || dns.ANCount > 0 {
 			logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
@@ -679,7 +679,12 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 						}
 
 						connFilter.allowedIPs.AddEntry(ip, ttl)
-						// TODO: add IPv4-mapped IPv6 addr
+						// If the IP address is an IPv4-mapped IPv6 address,
+						// add the unwrapped IPv4 address too. That is what
+						// will most likely be used.
+						if ip.Is4In6() {
+							connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
+						}
 					case layers.DNSTypeCNAME, layers.DNSTypeSRV, layers.DNSTypeMX, layers.DNSTypeNS:
 						// temporarily add CNAME, SRV, MX, and NS answers to allowed
 						// hostnames list
@@ -874,7 +879,7 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, e
 		}
 
 		if f.hostnameAllowed(names[i]) {
-			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip), zap.Duration("ttl", ttl))
+			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip))
 			f.allowedIPs.AddEntry(ip, ttl)
 			return true, nil
 		}
