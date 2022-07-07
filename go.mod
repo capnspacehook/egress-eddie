@@ -4,15 +4,19 @@ go 1.18
 
 require (
 	github.com/BurntSushi/toml v1.1.0
-	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff
 	github.com/google/gopacket v1.1.19
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
-	github.com/matryer/is v1.4.0
 	github.com/mdlayher/netlink v1.6.0
 	go.uber.org/zap v1.21.0
 	golang.org/x/sys v0.0.0-20220224120231-95c6836cb0e7
 	gvisor.dev/gvisor v0.0.0-20211124014810-d07633871257
+)
+
+// Test dependencies
+require (
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
+	github.com/matryer/is v1.4.0
 )
 
 require (
