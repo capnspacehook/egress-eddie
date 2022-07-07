@@ -10,7 +10,7 @@ require (
 	github.com/mdlayher/netlink v1.6.0
 	go.uber.org/zap v1.21.0
 	golang.org/x/sys v0.0.0-20220224120231-95c6836cb0e7
-	gvisor.dev/gvisor v0.0.0-20211124014810-d07633871257
+	gvisor.dev/gvisor v0.0.0-20220706205639-118a2001295b
 )
 
 // Test dependencies
@@ -29,5 +29,6 @@ require (
 	go.uber.org/multierr v1.6.0 // indirect
 	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect
+	golang.org/x/time v0.0.0-20191024005414-555d28b269f0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.63 // indirect
 )

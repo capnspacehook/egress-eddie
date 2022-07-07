@@ -214,5 +214,5 @@ func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error
 	// disable logging from seccomp package
 	log.SetTarget(&nullEmitter{})
 
-	return len(allowedSyscalls), seccomp.Install(allowedSyscalls)
+	return len(allowedSyscalls), seccomp.Install(allowedSyscalls, nil)
 }
