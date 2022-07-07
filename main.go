@@ -106,12 +106,10 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := StartFilters(ctx, logger, config)
+	filters, err := CreateFilters(ctx, logger, config)
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}
-	// TODO: block until seccomp filters are set
-	logger.Info("started filtering")
 
 	defer func() {
 		cancel()
@@ -132,6 +130,10 @@ func main() {
 		return
 	}
 	logger.Info("applied seccomp filters", zap.Int("syscalls.allowed", numAllowedSyscalls))
+
+	// Start filters now that seccomp filters have been applied
+	filters.Start()
+	logger.Info("started filtering")
 
 	<-ctx.Done()
 }

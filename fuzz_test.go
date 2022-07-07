@@ -58,10 +58,11 @@ func FuzzFiltering(f *testing.F) {
 		// test that a config that passes validation won't cause a
 		// error/panic when starting filters
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := StartFilters(ctx, logger, config)
+		f, err := CreateFilters(ctx, logger, config)
 		if err != nil {
 			failAndDumpConfig(t, cb, "error starting filters: %v", err)
 		}
+		f.Start()
 
 		allowIPv4Port := uint16(1000)
 		allowIPv6Port := uint16(1010)

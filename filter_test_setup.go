@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+var testingWithBinary = false
+
 func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client, func()) {
 	config, err := parseConfigBytes([]byte(configStr))
 	if err != nil {
@@ -40,10 +42,11 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	filters, err := StartFilters(ctx, logger, config)
+	filters, err := CreateFilters(ctx, logger, config)
 	if err != nil {
 		t.Fatalf("error starting filters: %v", err)
 	}
+	filters.Start()
 
 	client4, client6 := getHTTPClients()
 

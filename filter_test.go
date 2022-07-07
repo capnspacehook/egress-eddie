@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net"
-	"net/http"
 	"testing"
 	"time"
 
+	"github.com/florianl/go-nfqueue"
 	"github.com/matryer/is"
+	"go.uber.org/goleak"
+	"go.uber.org/zap"
 )
 
 func TestFiltering(t *testing.T) {
@@ -213,42 +214,88 @@ cachedHostnames = [
 	is.True(reqFailed(err)) // lookup of disallowed domain should fail
 }
 
-func makeHTTPReqs(client4, client6 *http.Client, addr string) error {
-	if client4 != nil {
-		resp, err := client4.Get(addr)
-		if err != nil {
-			return err
+func TestFiltersStart(t *testing.T) {
+	if testingWithBinary {
+		t.Skip()
+	}
+
+	configBytes := []byte(`
+inboundDNSQueue.ipv6 = 10
+selfDNSQueue.ipv6 = 110
+
+[[filters]]
+name = "test"
+dnsQueue.ipv6 = 1010
+trafficQueue.ipv6 = 1011
+reCacheEvery = "1m"
+cachedHostnames = [
+	"example.com",
+]
+allowAnswersFor = "1s"
+allowedHostnames = [
+	"test.org"
+]`)
+
+	is := is.New(t)
+
+	config, err := parseConfigBytes(configBytes)
+	is.NoErr(err)
+
+	config.enforcerCreator = newMockEnforcer
+
+	t.Run("filters waiting", func(t *testing.T) {
+		initMockEnforcers()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		f, err := CreateFilters(ctx, zap.NewNop(), config)
+		is.NoErr(err)
+		t.Cleanup(func() {
+			cancel()
+			f.Stop()
+		})
+
+		finishedAt := make(chan time.Time)
+
+		go func() {
+			mockEnforcers[config.InboundDNSQueue.IPv6].hook(nfqueue.Attribute{})
+			t.Log("finished DNS reply queue")
+			finishedAt <- time.Now()
+		}()
+		// the self-filter will be the first filter
+		testFilter := config.Filters[1]
+		go func() {
+			mockEnforcers[testFilter.DNSQueue.IPv6].hook(nfqueue.Attribute{})
+			t.Log("finished DNS request queue")
+			finishedAt <- time.Now()
+		}()
+		go func() {
+			mockEnforcers[testFilter.TrafficQueue.IPv6].hook(nfqueue.Attribute{})
+			t.Log("finished generic queue")
+			finishedAt <- time.Now()
+		}()
+
+		time.Sleep(time.Second)
+		startedAt := time.Now()
+		f.Start()
+		t.Log("starting filters")
+
+		for i := 0; i < 3; i++ {
+			t := <-finishedAt
+			is.True(t.After(startedAt)) // packet handling should have finished after filters were started
 		}
-		resp.Body.Close()
-	}
+	})
 
-	if client6 != nil {
-		resp, err := client6.Get(addr)
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-	}
+	t.Run("stopping without starting", func(t *testing.T) {
+		// test that goroutines are cleanly shutdown
+		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
-	return nil
-}
+		// use real nfqueues
+		config.enforcerCreator = nil
+		ctx, cancel := context.WithCancel(context.Background())
+		f, err := CreateFilters(ctx, zap.NewNop(), config)
+		is.NoErr(err)
 
-func reqFailed(err error) bool {
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return true
-	}
-
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-		return true
-	}
-
-	return false
-}
-
-func getTimeout(t *testing.T) context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	t.Cleanup(cancel)
-
-	return ctx
+		cancel()
+		f.Stop()
+	})
 }

@@ -17,6 +17,7 @@ require (
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/matryer/is v1.4.0
+	go.uber.org/goleak v1.1.12
 )
 
 require (

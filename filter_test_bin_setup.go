@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var testingWithBinary = true
+
 func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client, func()) {
 	f, err := os.CreateTemp("", "egress_eddie")
 	if err != nil {

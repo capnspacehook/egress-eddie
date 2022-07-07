@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os/exec"
@@ -10,6 +11,46 @@ import (
 
 	"github.com/anmitsu/go-shlex"
 )
+
+func makeHTTPReqs(client4, client6 *http.Client, addr string) error {
+	if client4 != nil {
+		resp, err := client4.Get(addr)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+	}
+
+	if client6 != nil {
+		resp, err := client6.Get(addr)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+	}
+
+	return nil
+}
+
+func reqFailed(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+
+	return false
+}
+
+func getTimeout(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+
+	return ctx
+}
 
 func getHTTPClients() (*http.Client, *http.Client) {
 	dialer := net.Dialer{
