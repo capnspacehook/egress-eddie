@@ -43,6 +43,8 @@ func (m *mockEnforcer) SetVerdict(id uint32, verdict int) error {
 		return errors.New("id is zero")
 	}
 
+	// these are not the only valid verdicts, but they are the only
+	// verdicts egress eddie will pass
 	if verdict != nfqueue.NfDrop && verdict != nfqueue.NfAccept {
 		return fmt.Errorf("invalid verdict %d", verdict)
 	}

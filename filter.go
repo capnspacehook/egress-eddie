@@ -28,6 +28,8 @@ const (
 	stateRelatedReply     = stateRelated + stateIsReply
 	stateUntracked        = 7
 
+	// give DNS connections a minute to finish max
+	// TODO: should this be configurable?
 	dnsQueryTimeout = time.Minute
 )
 
@@ -68,6 +70,8 @@ type filter struct {
 	isSelfFilter bool
 }
 
+// connectionID is used to correlate DNS requests and responses from
+// the same connection
 type connectionID struct {
 	isUDP bool
 	src   netip.AddrPort
@@ -111,6 +115,7 @@ func StartFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fil
 		filters:   make([]*filter, len(config.Filters)),
 	}
 
+	// if mock enforcers and resolver is not set, use real ones
 	newEnforcer := config.enforcerCreator
 	if newEnforcer == nil {
 		newEnforcer = startNfQueue
@@ -290,6 +295,8 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	logger.Debug("starting cache loop")
 
 	var (
+		// add to the user supplied duration to ensure there isn't a
+		// window where hostnames are not allowed
 		ttl   = time.Duration(f.opts.ReCacheEvery) + dnsQueryTimeout
 		timer = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
 	)
@@ -435,7 +442,6 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 
 		logger.Info("allowing DNS request", dnsFields(dns)...)
 
-		// give DNS connections a minute to finish max
 		logger.Debug("adding connection")
 		f.connections.AddEntry(connID, dnsQueryTimeout)
 
@@ -526,7 +532,6 @@ func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool 
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		logger.Info("dropping DNS request with no questions")
 		return false
 	}
 
@@ -643,7 +648,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// block requests for disallowed hostnames but it doesn't
 			// hurt to check
 			if !connFilter.validateDNSQuestions(logger, dns) {
-				logger.Info("dropping DNS request", dnsFields(dns)...)
+				logger.Info("dropping DNS reply", dnsFields(dns)...)
 				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.NamedError("error", err))
 				}

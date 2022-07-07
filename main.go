@@ -80,8 +80,8 @@ func main() {
 
 	// Try and apply landlock rules, preventing access to non-essential
 	// files. Only recent versions of the kernel support landlock (5.13+),
-	// but we will ignroe errors if the kernel itself does not support it.
-	// These rules can only apply when egress-eddie does not need to make
+	// but we will ignore errors if the kernel itself does not support it.
+	// These rules can only be applied when egress-eddie does not need to make
 	// network connections, as currently it seems landlock does not support
 	// networking.
 	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
@@ -121,7 +121,7 @@ func main() {
 
 	// Install seccomp filters to severely limit what egress-eddie is
 	// allowed to do. The landlock rules plus the seccomp filters
-	// will hopefully make it extremely difficult for an attacker to do
+	// should make it extremely difficult for an attacker to do
 	// anything of value from the context of an egress-eddie process.
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of

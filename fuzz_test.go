@@ -616,6 +616,7 @@ func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, op
 		ipLayerType = layers.IPProtocolIPv6
 	}
 
+	// if src or dst IPs aren't set, this is a DNS packet
 	if opts.srcIP == nil || opts.dstIP == nil {
 		// if src or dst IPs aren't set, set them to localhost for DNS packets
 		if !opts.ipv6 {

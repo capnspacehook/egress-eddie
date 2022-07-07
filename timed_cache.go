@@ -7,6 +7,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// TimedCache is a concurrency-safe timed cache. It stores entries, not
+// key-value pairs.
 type TimedCache[T comparable] struct {
 	mtx    sync.RWMutex
 	wg     sync.WaitGroup
@@ -16,6 +18,8 @@ type TimedCache[T comparable] struct {
 	count bool
 }
 
+// countedTimer stores the optional count and deadline for eviction
+// of an entry stored in a TimedCache.
 type countedTimer struct {
 	count  int
 	status chan timerStatus
@@ -32,6 +36,11 @@ const (
 	stop                     // signals that the goroutine should finish
 )
 
+// NewTimedCache creates a new timed cache. If count is true, entries will
+// take n RemoveEntry calls to be manually removed from the cache where n
+// is the number of times AddEntry is called with the same entry.
+// Entries will be removed from the cache when the deadline is reached
+// regardless of whether the cache is a counting cache or not.
 func NewTimedCache[T comparable](logger *zap.Logger, count bool) *TimedCache[T] {
 	var t TimedCache[T]
 
@@ -122,6 +131,9 @@ func (t *TimedCache[T]) RemoveEntry(entry T) {
 		return
 	}
 
+	// we have already acquired a mutex lock here, so tell the child
+	// goroutine to stop so it won't attempt to also remove this entry
+	// as well
 	ct.status <- stop
 	if !ct.timer.Stop() {
 		<-ct.timer.C
@@ -131,6 +143,8 @@ func (t *TimedCache[T]) RemoveEntry(entry T) {
 	delete(t.cache, entry)
 }
 
+// Stop kills all goroutines waiting on entry deadlines. Entries are not
+// removed from the cache.
 func (t *TimedCache[T]) Stop() {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()

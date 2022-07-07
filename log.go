@@ -8,6 +8,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// dnsFields returns a list of fields for a zap logger that describes
+// a DNS packet.
 func dnsFields(dns *layers.DNS) []zap.Field {
 	fields := []zap.Field{
 		zap.Uint8("opcode", uint8(dns.OpCode)),
