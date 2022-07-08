@@ -151,7 +151,7 @@ allowedHostnames = [
 ```
 
 If you are filtering `IPv6` traffic and using ip6tables, set `inboundDNSQueue.ipv6`,
-`dnsQueue.ipv6`, and `trafficQueue.ipv4`.
+`dnsQueue.ipv6`, and `trafficQueue.ipv6`.
 
 Next we create a filter, setting the nfqueue numbers used for DNS requests and traffic
 that we want filtered. The `name` of each filter is simply an identifier that will allow
