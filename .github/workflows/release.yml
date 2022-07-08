@@ -15,6 +15,6 @@ jobs:
         goarch: amd64
         binary_name: egress-eddie
         pre_command: "export CGO_ENABLED=0"
-        build_flags: "-trimpath"
+        build_flags: "-buildmode=pie -trimpath"
         ldflags: "-w -s"
         sha256sum: true
