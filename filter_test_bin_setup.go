@@ -37,7 +37,7 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 		iptablesCmd(t, true, command)
 	}
 
-	eddieCmd := exec.Command("./eddie", "-c", configPath, "-d", "-l", "stdout")
+	eddieCmd := exec.Command("./eddie", "-c", configPath, "-d", "-f", "-l", "stdout")
 	eddieCmd.Stdout = os.Stdout
 	eddieCmd.Stderr = os.Stderr
 	if err := eddieCmd.Start(); err != nil {

@@ -10,28 +10,31 @@ import (
 
 // dnsFields returns a list of fields for a zap logger that describes
 // a DNS packet.
-func dnsFields(dns *layers.DNS) []zap.Field {
-	fields := []zap.Field{
-		zap.Uint8("opcode", uint8(dns.OpCode)),
-	}
+func dnsFields(dns *layers.DNS, fullDNSLogging bool) []zap.Field {
+	var (
+		fields []zap.Field
+		flags  []string
+	)
 
-	var flags []string
-	if dns.AA {
-		flags = append(flags, "aa")
-	}
-	if dns.TC {
-		flags = append(flags, "tc")
-	}
-	if dns.RD {
-		flags = append(flags, "rd")
-	}
-	if dns.RA {
-		flags = append(flags, "ra")
-	}
-	fields = append(fields, zap.Strings("flags", flags))
+	if fullDNSLogging {
+		fields = append(fields, zap.Uint8("opcode", uint8(dns.OpCode)))
+		if dns.AA {
+			flags = append(flags, "aa")
+		}
+		if dns.TC {
+			flags = append(flags, "tc")
+		}
+		if dns.RD {
+			flags = append(flags, "rd")
+		}
+		if dns.RA {
+			flags = append(flags, "ra")
+		}
+		fields = append(fields, zap.Strings("flags", flags))
 
-	if dns.QR {
-		fields = append(fields, zap.Uint8("resp-code", uint8(dns.ResponseCode)))
+		if dns.QR {
+			fields = append(fields, zap.Uint8("resp-code", uint8(dns.ResponseCode)))
+		}
 	}
 
 	if dns.QDCount > 0 {
@@ -51,8 +54,10 @@ func dnsFields(dns *layers.DNS) []zap.Field {
 	}
 
 	stringify(dns.Answers, "answers")
-	stringify(dns.Authorities, "authorities")
-	stringify(dns.Additionals, "additionals")
+	if fullDNSLogging {
+		stringify(dns.Authorities, "authorities")
+		stringify(dns.Additionals, "additionals")
+	}
 
 	return fields
 }

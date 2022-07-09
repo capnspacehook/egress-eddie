@@ -18,16 +18,18 @@ import (
 )
 
 var (
-	configPath   string
-	debugLogs    bool
-	logPath      string
-	testConfig   bool
-	printVersion bool
+	configPath        string
+	debugLogs         bool
+	logFullDNSPackets bool
+	logPath           string
+	testConfig        bool
+	printVersion      bool
 )
 
 func init() {
 	flag.StringVar(&configPath, "c", "egress-eddie.toml", "path of the config file")
 	flag.BoolVar(&debugLogs, "d", false, "enable debug logging")
+	flag.BoolVar(&logFullDNSPackets, "f", false, "enable full DNS packet logging")
 	flag.StringVar(&logPath, "l", "egress-eddie.log", "path to log to")
 	flag.BoolVar(&testConfig, "t", false, "validate the config and exit")
 	flag.BoolVar(&printVersion, "version", false, "print version and build information and exit")
@@ -106,7 +108,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := CreateFilters(ctx, logger, config)
+	filters, err := CreateFilters(ctx, logger, config, logFullDNSPackets)
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}

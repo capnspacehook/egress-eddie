@@ -39,7 +39,8 @@ type FilterManager struct {
 
 	started bool
 
-	logger *zap.Logger
+	fullDNSLogging bool
+	logger         *zap.Logger
 
 	queueNum4 uint16
 	queueNum6 uint16
@@ -63,7 +64,8 @@ type filter struct {
 
 	opts *FilterOptions
 
-	logger *zap.Logger
+	fullDNSLogging bool
+	logger         *zap.Logger
 
 	dnsReqNF4  enforcer
 	dnsReqNF6  enforcer
@@ -117,14 +119,15 @@ type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint
 
 // CreateFilters creates packet filters. The returned FilterManager can
 // be used to start or stop packet filtering.
-func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config) (*FilterManager, error) {
+func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, fullDNSLogging bool) (*FilterManager, error) {
 	f := FilterManager{
-		ready:     make(chan struct{}),
-		abort:     make(chan struct{}),
-		logger:    logger,
-		queueNum4: config.InboundDNSQueue.IPv4,
-		queueNum6: config.InboundDNSQueue.IPv6,
-		filters:   make([]*filter, len(config.Filters)),
+		ready:          make(chan struct{}),
+		abort:          make(chan struct{}),
+		fullDNSLogging: fullDNSLogging,
+		logger:         logger,
+		queueNum4:      config.InboundDNSQueue.IPv4,
+		queueNum6:      config.InboundDNSQueue.IPv6,
+		filters:        make([]*filter, len(config.Filters)),
 	}
 
 	// if mock enforcers and resolver is not set, use real ones
@@ -148,7 +151,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config) (*Fi
 
 	for i := range config.Filters {
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
-		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, newEnforcer, res)
+		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, f.fullDNSLogging, newEnforcer, res)
 		if err != nil {
 			// TODO: stop other filters here
 			return nil, err
@@ -195,24 +198,25 @@ func (f *FilterManager) Stop() {
 	}
 }
 
-func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter bool, newEnforcer enforcerCreator, res resolver) (*filter, error) {
+func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter, fullDNSLogging bool, newEnforcer enforcerCreator, res resolver) (*filter, error) {
 	filterLogger := logger
 	if opts.Name != "" {
 		filterLogger = filterLogger.With(zap.String("filter.name", opts.Name))
 	}
 
 	f := filter{
-		dnsReqReady:  make(chan struct{}),
-		dnsReqAbort:  make(chan struct{}),
-		genericReady: make(chan struct{}),
-		genericAbort: make(chan struct{}),
-		cachingReady: make(chan struct{}),
-		cachingAbort: make(chan struct{}),
-		opts:         opts,
-		logger:       filterLogger,
-		res:          res,
-		connections:  NewTimedCache[connectionID](logger, true),
-		isSelfFilter: isSelfFilter,
+		dnsReqReady:    make(chan struct{}),
+		dnsReqAbort:    make(chan struct{}),
+		genericReady:   make(chan struct{}),
+		genericAbort:   make(chan struct{}),
+		cachingReady:   make(chan struct{}),
+		cachingAbort:   make(chan struct{}),
+		opts:           opts,
+		fullDNSLogging: fullDNSLogging,
+		logger:         filterLogger,
+		res:            res,
+		connections:    NewTimedCache[connectionID](logger, true),
+		isSelfFilter:   isSelfFilter,
 	}
 
 	if opts.TrafficQueue.eitherSet() {
@@ -495,7 +499,7 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 
 		// drop DNS replies, they shouldn't be going to this filter
 		if dns.QR || dns.ANCount > 0 {
-			logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns)...)
+			logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.String("error", err.Error()))
 			}
@@ -505,14 +509,14 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
 		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(logger, dns) {
-			logger.Warn("dropping DNS request", dnsFields(dns)...)
+			logger.Warn("dropping DNS request", dnsFields(dns, f.fullDNSLogging)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
 			}
 			return 0
 		}
 
-		logger.Info("allowing DNS request", dnsFields(dns)...)
+		logger.Info("allowing DNS request", dnsFields(dns, f.fullDNSLogging)...)
 
 		logger.Debug("adding connection")
 		f.connections.AddEntry(connID, dnsQueryTimeout)
@@ -706,7 +710,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			}
 		}
 		if connFilter == nil {
-			logger.Warn("dropping DNS response from unknown connection", dnsFields(dns)...)
+			logger.Warn("dropping DNS response from unknown connection", dnsFields(dns, f.fullDNSLogging)...)
 
 			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
@@ -726,7 +730,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// block requests for disallowed hostnames but it doesn't
 			// hurt to check
 			if !connFilter.validateDNSQuestions(logger, dns) {
-				logger.Info("dropping DNS reply", dnsFields(dns)...)
+				logger.Info("dropping DNS reply", dnsFields(dns, f.fullDNSLogging)...)
 				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.NamedError("error", err))
 				}
@@ -788,7 +792,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			}
 		}
 
-		logger.Info("allowing DNS reply", dnsFields(dns)...)
+		logger.Info("allowing DNS reply", dnsFields(dns, f.fullDNSLogging)...)
 		if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
 			logger.Error("error setting verdict", zap.NamedError("error", err))
 		}

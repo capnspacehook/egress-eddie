@@ -42,7 +42,7 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	filters, err := CreateFilters(ctx, logger, config)
+	filters, err := CreateFilters(ctx, logger, config, true)
 	if err != nil {
 		t.Fatalf("error starting filters: %v", err)
 	}

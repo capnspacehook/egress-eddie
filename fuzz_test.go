@@ -58,7 +58,7 @@ func FuzzFiltering(f *testing.F) {
 		// test that a config that passes validation won't cause a
 		// error/panic when starting filters
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := CreateFilters(ctx, logger, config)
+		f, err := CreateFilters(ctx, logger, config, false)
 		if err != nil {
 			failAndDumpConfig(t, cb, "error starting filters: %v", err)
 		}

@@ -247,7 +247,7 @@ allowedHostnames = [
 		initMockEnforcers()
 
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := CreateFilters(ctx, zap.NewNop(), config)
+		f, err := CreateFilters(ctx, zap.NewNop(), config, false)
 		is.NoErr(err)
 		t.Cleanup(func() {
 			cancel()
@@ -292,7 +292,7 @@ allowedHostnames = [
 		// use real nfqueues
 		config.enforcerCreator = nil
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := CreateFilters(ctx, zap.NewNop(), config)
+		f, err := CreateFilters(ctx, zap.NewNop(), config, false)
 		is.NoErr(err)
 
 		cancel()
