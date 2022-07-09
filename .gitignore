@@ -4,6 +4,7 @@
 *.out
 *.toml
 *.sh
+*.test
 
 eddie
 egress-eddie
