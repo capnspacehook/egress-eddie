@@ -10,7 +10,6 @@ jobs:
 
     - name: Configure DNS
       run: |
-        sudo systemctl stop systemd-resolver
         RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
         sudo echo -e "$RESOLVERS" > /etc/resolv.conf
 
@@ -30,7 +29,6 @@ jobs:
 
     - name: Configure DNS
       run: |
-        sudo systemctl stop systemd-resolver
         RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
         sudo echo -e "$RESOLVERS" > /etc/resolv.conf
 
