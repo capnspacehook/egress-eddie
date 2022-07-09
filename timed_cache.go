@@ -55,6 +55,8 @@ func (t *TimedCache[T]) AddEntry(entry T, ttl time.Duration) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
+	t.logger.Debug("adding entry", zap.Any("entry", entry))
+
 	ct, ok := t.cache[entry]
 	if ok {
 		if t.count {
