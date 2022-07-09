@@ -11,6 +11,7 @@ jobs:
     # the test is compiled and run as root so that egress eddie can
     # open nfqueues, which is a privileged operation
     - uses: actions/checkout@v3
+    
     - run: |
         go test -c -race -o eddie_tests.bin
         sudo ./eddie_tests.bin -test.v -test.failfast
@@ -25,6 +26,7 @@ jobs:
     # run the same tests as above but use a separate compiled binary to
     # process packets to test with seccomp filters active
     - uses: actions/checkout@v3
+    
     - run: |
         CGO_ENABLED=0 go build -o eddie
         go test -c -tags test_binary -o eddie_tests.bin
@@ -40,5 +42,6 @@ jobs:
     - uses: actions/checkout@v3
       with:
         submodules: true
-      run: |
+    
+    - run: |
         go test -fuzz Fuzz -run Config -fuzztime 10m
