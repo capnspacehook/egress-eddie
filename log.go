@@ -71,7 +71,8 @@ type dnsQuestion layers.DNSQuestion
 
 func (q dnsQuestion) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddByteString("name", q.Name)
-	enc.AddString("type", q.Type.String())
+	enc.AddString("class", strings.ToLower(q.Class.String()))
+	enc.AddString("type", strings.ToLower(q.Type.String()))
 	return nil
 }
 
