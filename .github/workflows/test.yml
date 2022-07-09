@@ -1,0 +1,43 @@
+on: [push, pull_request]
+name: Test
+jobs:
+  race-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/setup-go@v3
+      with:
+        go-version: 1.18.x
+
+    - name: Configure DNS
+      run: |
+        sudo systemctl stop systemd-resolver
+        RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
+        sudo echo -e "$RESOLVERS" > /etc/resolv.conf
+
+    # the test is compiled and run as root so that egress eddie can
+    # open nfqueues, which is a privileged operation
+    - uses: actions/checkout@v3
+    - run: |
+        go test -c -race -o eddie_tests.bin
+        sudo ./eddie_tests.bin -test.v -test.failfast
+  
+  binary-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/setup-go@v3
+      with:
+        go-version: 1.18.x
+
+    - name: Configure DNS
+      run: |
+        sudo systemctl stop systemd-resolver
+        RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
+        sudo echo -e "$RESOLVERS" > /etc/resolv.conf
+
+    # run the same tests as above but use a separate compiled binary to
+    # process packets to test with seccomp filters active
+    - uses: actions/checkout@v3
+    - run: |
+        CGO_ENABLED=0 go build -o eddie
+        go test -c -tags test_binary -o eddie_tests.bin
+        sudo ./eddie_tests.bin -test.v -test.failfast
