@@ -1,0 +1,3 @@
+[submodule "testdata/fuzz"]
+	path = testdata/fuzz
+	url = git@github.com:capnspacehook/egress-eddie-corpus.git
