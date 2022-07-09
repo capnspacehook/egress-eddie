@@ -42,7 +42,7 @@ func main() {
 	}
 
 	if printVersion {
-		fmt.Println(info)
+		printVersionInfo(info)
 		os.Exit(0)
 	}
 

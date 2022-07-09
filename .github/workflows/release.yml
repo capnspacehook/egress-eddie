@@ -8,6 +8,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+
+    - name: Get version
+      run: |
+        GIT_TAG="$(git tag --sort=-version:refname | head -n 1)"
+        echo $GIT_TAG
+
     - uses: wangyoucao577/go-release-action@v1.29
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -16,5 +22,5 @@ jobs:
         binary_name: egress-eddie
         pre_command: "export CGO_ENABLED=0"
         build_flags: "-buildmode=pie -trimpath"
-        ldflags: "-w -s"
+        ldflags: -w -s -X main.version="${{ env.GIT_TAG }}"
         sha256sum: true
