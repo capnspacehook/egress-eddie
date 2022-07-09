@@ -1,2 +1,0 @@
-go test fuzz v1
-[]byte("\ninboundDNSQueue.ipv4 = 1\nyelfDNSQueue.ipv4 = 100\n\n[[filters]]\nname = \"foo\"\ndnsQueue.ipv4 = 1000\ntrafficQueue.ipv4 = 1001\nallowAnswersFor = \"10us\"\nallowedHostnames = [\"foo\"]")
