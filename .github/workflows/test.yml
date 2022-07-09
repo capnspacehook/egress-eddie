@@ -11,7 +11,7 @@ jobs:
     - name: Configure DNS
       run: |
         RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
-        sudo echo -e "$RESOLVERS" > /etc/resolv.conf
+        echo -e "$RESOLVERS" | sudo tee /etc/resolv.conf
 
     # the test is compiled and run as root so that egress eddie can
     # open nfqueues, which is a privileged operation
@@ -30,7 +30,7 @@ jobs:
     - name: Configure DNS
       run: |
         RESOLVERS="nameserver 1.1.1.1\nnameserver 1.0.0.1\nnameserver 2606:4700:4700::1111\nnameserver 2606:4700:4700::1001"
-        sudo echo -e "$RESOLVERS" > /etc/resolv.conf
+        echo -e "$RESOLVERS" | sudo tee /etc/resolv.conf
 
     # run the same tests as above but use a separate compiled binary to
     # process packets to test with seccomp filters active
