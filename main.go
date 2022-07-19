@@ -62,6 +62,18 @@ func main() {
 		log.Fatalf("error creating logger: %v", err)
 	}
 
+	var versionFields []zap.Field
+	if version == "" {
+		version = "devel"
+	}
+	versionFields = append(versionFields, zap.String("version", version))
+	for _, buildSetting := range info.Settings {
+		if buildSetting.Key == "vcs.revision" {
+			versionFields = append(versionFields, zap.String("commit", buildSetting.Value))
+		}
+	}
+	logger.Info("starting Egress Eddie", versionFields...)
+
 	for _, buildSetting := range info.Settings {
 		if buildSetting.Key == "CGO_ENABLED" && buildSetting.Value != "0" {
 			logger.Fatal("this binary was built with cgo and will not function as intended; rebuild with cgo disabled")
