@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +34,10 @@ var (
 
 func FuzzFiltering(f *testing.F) {
 	for _, tt := range configTests {
-		f.Add([]byte(tt.configStr))
+		// only add valid configs to the corpus
+		if strings.HasPrefix(tt.testName, "valid") {
+			f.Add([]byte(tt.configStr))
+		}
 	}
 
 	logger := zap.NewNop()
@@ -48,7 +52,7 @@ func FuzzFiltering(f *testing.F) {
 	f.Fuzz(func(t *testing.T, cb []byte) {
 		config, err := parseConfigBytes(cb)
 		if err != nil {
-			return
+			t.SkipNow()
 		}
 
 		initMockEnforcers()
