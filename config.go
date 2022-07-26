@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 	_ "unsafe"
 
 	"github.com/BurntSushi/toml"
+	"golang.org/x/exp/slices"
 )
 
 const selfFilterName = "self-filter"
@@ -19,6 +22,10 @@ func (d *duration) UnmarshalText(text []byte) error {
 	if err != nil {
 		return err
 	}
+	if dur < 0 {
+		return errors.New("duration cannot be negative")
+	}
+
 	*d = duration(dur)
 
 	return nil
@@ -96,8 +103,21 @@ func ParseConfig(confPath string) (*Config, error) {
 func parseConfigBytes(cb []byte) (*Config, error) {
 	var config Config
 
-	if err := toml.Unmarshal(cb, &config); err != nil {
+	md, err := toml.Decode(string(cb), &config)
+	if err != nil {
 		return nil, err
+	}
+	if undec := md.Undecoded(); len(undec) > 0 {
+		var sb strings.Builder
+		sb.WriteString("unknown keys ")
+		for i, key := range undec {
+			sb.WriteString(strconv.Quote(key.String()))
+			if i != len(undec)-1 {
+				sb.WriteString(", ")
+			}
+		}
+
+		return nil, errors.New(sb.String())
 	}
 
 	if len(config.Filters) == 0 {
@@ -203,15 +223,23 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedHostnames" is empty`, filterOpt.Name)
 		}
 
-		// TODO: test
-		for _, name := range filterOpt.AllowedHostnames {
+		for i, name := range filterOpt.AllowedHostnames {
 			if !validDomainName(name) {
-				return nil, fmt.Errorf(`filter %q: allowed hostname %q is not a valid domain name`, filterOpt.Name, name)
+				return nil, fmt.Errorf("filter %q: allowed hostname %q is not a valid domain name", filterOpt.Name, name)
+			}
+			if slices.Contains(filterOpt.CachedHostnames, name) {
+				return nil, fmt.Errorf("filter %q: allowed hostname %q is specified as a hostname to be cached as well", filterOpt.Name, name)
+			}
+			if i != len(filterOpt.AllowedHostnames)-1 && slices.Contains(filterOpt.AllowedHostnames[i+1:], name) {
+				return nil, fmt.Errorf("filter %q: allowed hostname %q is specified more than once", filterOpt.Name, name)
 			}
 		}
-		for _, name := range filterOpt.CachedHostnames {
+		for i, name := range filterOpt.CachedHostnames {
 			if !validDomainName(name) {
-				return nil, fmt.Errorf(`filter %q: hostname to be cached %q is not a valid domain name`, filterOpt.Name, name)
+				return nil, fmt.Errorf("filter %q: hostname to be cached %q is not a valid domain name", filterOpt.Name, name)
+			}
+			if i != len(filterOpt.CachedHostnames)-1 && slices.Contains(filterOpt.CachedHostnames[i+1:], name) {
+				return nil, fmt.Errorf("filter %q: hostname to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
@@ -220,22 +248,22 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 		if filterOpt.DNSQueue.IPv4 != 0 {
 			if name, ok := filterQueues[filterOpt.DNSQueue.IPv4]; ok {
-				return nil, fmt.Errorf(`filter %q: dnsQueue.ipv4 %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv4, name)
+				return nil, fmt.Errorf(`filter %q: "dnsQueue.ipv4" %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv4, name)
 			}
 		}
 		if filterOpt.DNSQueue.IPv6 != 0 {
 			if name, ok := filterQueues[filterOpt.DNSQueue.IPv6]; ok {
-				return nil, fmt.Errorf(`filter %q: dnsQueue.ipv6 %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv6, name)
+				return nil, fmt.Errorf(`filter %q: "dnsQueue.ipv6" %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue.IPv6, name)
 			}
 		}
 		if filterOpt.TrafficQueue.IPv4 != 0 {
 			if name, ok := filterQueues[filterOpt.TrafficQueue.IPv4]; ok {
-				return nil, fmt.Errorf(`filter %q: trafficQueue.ipv4 %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv4, name)
+				return nil, fmt.Errorf(`filter %q: "trafficQueue.ipv4" %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv4, name)
 			}
 		}
 		if filterOpt.TrafficQueue.IPv6 != 0 {
 			if name, ok := filterQueues[filterOpt.TrafficQueue.IPv6]; ok {
-				return nil, fmt.Errorf(`filter %q: trafficQueue.ipv6 %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv6, name)
+				return nil, fmt.Errorf(`filter %q: "trafficQueue.ipv6" %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue.IPv6, name)
 			}
 		}
 

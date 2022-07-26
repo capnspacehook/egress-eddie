@@ -9,6 +9,7 @@ require (
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
 	github.com/mdlayher/netlink v1.6.0
 	go.uber.org/zap v1.21.0
+	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
 	golang.org/x/sys v0.0.0-20220224120231-95c6836cb0e7
 	gvisor.dev/gvisor v0.0.0-20220706205639-118a2001295b
 )
@@ -21,7 +22,7 @@ require (
 )
 
 require (
-	github.com/google/go-cmp v0.5.7 // indirect
+	github.com/google/go-cmp v0.5.8 // indirect
 	github.com/josharian/native v1.0.0 // indirect
 	github.com/mdlayher/socket v0.2.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

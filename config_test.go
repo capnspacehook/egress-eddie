@@ -14,6 +14,12 @@ var configTests = []struct {
 	expectedErr    string
 }{
 	{
+		testName:       "unknown key",
+		configStr:      "foo=1",
+		expectedConfig: nil,
+		expectedErr:    `unknown keys "foo"`,
+	},
+	{
 		testName:       "empty",
 		configStr:      "",
 		expectedConfig: nil,
@@ -236,6 +242,19 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1000`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "dnsQueue" and "trafficQueue" must be different`,
+	},
+	{
+		testName: "negative duration",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+allowAnswersFor = "-1m"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    "duration cannot be negative",
 	},
 	{
 		testName: "selfDNSQueue invalid",
@@ -487,6 +506,87 @@ allowedHostnames = ["foo"]`,
 		expectedErr:    `"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`,
 	},
 	{
+		testName: "invalid allowed hostname",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["foo."]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": allowed hostname "foo." is not a valid domain name`,
+	},
+	{
+		testName: "shared allowed and cached hostname",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+allowAnswersFor = "10s"
+allowedHostnames = ["foo"]
+reCacheEvery = "10s"
+cachedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": allowed hostname "foo" is specified as a hostname to be cached as well`,
+	},
+	{
+		testName: "duplicate allowed hostname",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+allowAnswersFor = "10s"
+allowedHostnames = [
+	"twice",
+	"twice",
+]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": allowed hostname "twice" is specified more than once`,
+	},
+	{
+		testName: "invalid cached hostname",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
+
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+reCacheEvery = "10s"
+cachedHostnames = ["foo."]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": hostname to be cached "foo." is not a valid domain name`,
+	},
+	{
+		testName: "duplicate cached hostname",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+selfDNSQueue.ipv4 = 100
+
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+reCacheEvery = "10s"
+cachedHostnames = [
+	"twice",
+	"twice",
+]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": hostname to be cached "twice" is specified more than once`,
+	},
+	{
 		testName: "duplicate filter names",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -528,7 +628,7 @@ trafficQueue.ipv4 = 2001
 allowAnswersFor = "10s"
 allowedHostnames = ["bar"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "bar": dnsQueue.ipv4 1000 is already used by filter "foo"`,
+		expectedErr:    `filter "bar": "dnsQueue.ipv4" 1000 is already used by filter "foo"`,
 	},
 	{
 		testName: "duplicate trafficQueues",
@@ -550,7 +650,7 @@ trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
 allowedHostnames = ["bar"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "bar": trafficQueue.ipv4 1001 is already used by filter "foo"`,
+		expectedErr:    `filter "bar": "trafficQueue.ipv4" 1001 is already used by filter "foo"`,
 	},
 	{
 		testName: "selfDNSQueue and dnsQueue same",
