@@ -353,8 +353,8 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	var (
 		// add to the user supplied duration to ensure there isn't a
 		// window where hostnames are not allowed
-		ttl   = time.Duration(f.opts.ReCacheEvery) + dnsQueryTimeout
-		timer = time.NewTimer(time.Duration(f.opts.ReCacheEvery))
+		ttl   = f.opts.ReCacheEvery + dnsQueryTimeout
+		timer = time.NewTimer(f.opts.ReCacheEvery)
 	)
 
 	for {
@@ -386,7 +386,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 			}
 		}
 
-		timer.Reset(time.Duration(f.opts.ReCacheEvery))
+		timer.Reset(f.opts.ReCacheEvery)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -740,7 +740,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// don't process the DNS response if the filter it came
 			// from is the self filter
 			if !connFilter.isSelfFilter && dns.ANCount > 0 {
-				ttl := time.Duration(connFilter.opts.AllowAnswersFor)
+				ttl := connFilter.opts.AllowAnswersFor
 				for _, answer := range dns.Answers {
 					aName := string(answer.Name)
 					if !connFilter.hostnameAllowed(aName) {
@@ -958,7 +958,7 @@ func (f *filter) lookupAndValidateIP(logger *zap.Logger, ip netip.Addr) (bool, e
 		return false, err
 	}
 
-	ttl := time.Duration(f.opts.AllowAnswersFor)
+	ttl := f.opts.AllowAnswersFor
 	for i := range names {
 		// remove trailing dot if necessary before searching through
 		// allowed hostnames

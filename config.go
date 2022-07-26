@@ -15,22 +15,6 @@ import (
 
 const selfFilterName = "self-filter"
 
-type duration time.Duration
-
-func (d *duration) UnmarshalText(text []byte) error {
-	dur, err := time.ParseDuration(string(text))
-	if err != nil {
-		return err
-	}
-	if dur < 0 {
-		return errors.New("duration cannot be negative")
-	}
-
-	*d = duration(dur)
-
-	return nil
-}
-
 type queue struct {
 	IPv4 uint16
 	IPv6 uint16
@@ -85,8 +69,8 @@ type FilterOptions struct {
 	TrafficQueue      queue
 	AllowAllHostnames bool
 	LookupUnknownIPs  bool
-	AllowAnswersFor   duration
-	ReCacheEvery      duration
+	AllowAnswersFor   time.Duration
+	ReCacheEvery      time.Duration
 	AllowedHostnames  []string
 	CachedHostnames   []string
 }
@@ -212,6 +196,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.AllowAnswersFor != 0 && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be set when "allowAllHostnames" is true`, filterOpt.Name)
 		}
+		if filterOpt.AllowAnswersFor < 0 {
+			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be negative`, filterOpt.Name)
+		}
 
 		if len(filterOpt.CachedHostnames) > 0 && filterOpt.AllowAllHostnames {
 			return nil, fmt.Errorf(`filter %q: "cachedHostnames" must be empty when "allowAllHostnames" is true`, filterOpt.Name)
@@ -219,8 +206,11 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedHostnames) > 0 {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedHostnames" is not empty`, filterOpt.Name)
 		}
-		if filterOpt.ReCacheEvery > 0 && len(filterOpt.CachedHostnames) == 0 {
+		if filterOpt.ReCacheEvery != 0 && len(filterOpt.CachedHostnames) == 0 {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedHostnames" is empty`, filterOpt.Name)
+		}
+		if filterOpt.ReCacheEvery < 0 {
+			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be negative`, filterOpt.Name)
 		}
 
 		for i, name := range filterOpt.AllowedHostnames {

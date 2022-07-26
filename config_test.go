@@ -244,19 +244,6 @@ trafficQueue.ipv4 = 1000`,
 		expectedErr:    `filter "foo": "dnsQueue" and "trafficQueue" must be different`,
 	},
 	{
-		testName: "negative duration",
-		configStr: `
-inboundDNSQueue.ipv4 = 1
-
-[[filters]]
-name = "foo"
-dnsQueue.ipv4 = 1000
-allowAnswersFor = "-1m"
-allowedHostnames = ["foo"]`,
-		expectedConfig: nil,
-		expectedErr:    "duration cannot be negative",
-	},
-	{
 		testName: "selfDNSQueue invalid",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -423,6 +410,20 @@ allowAllHostnames = true`,
 		expectedErr:    `filter "foo": "allowAnswersFor" must not be set when "allowAllHostnames" is true`,
 	},
 	{
+		testName: "negative allowAnswersFor",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+allowAnswersFor = "-1m"
+allowedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "allowAnswersFor" must not be negative`,
+	},
+	{
 		testName: "cachedHostnames not empty and allowAllHostnames is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -460,6 +461,19 @@ allowAnswersFor = "5s"
 allowedHostnames = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "reCacheEvery" must not be set when "cachedHostnames" is empty`,
+	},
+	{
+		testName: "negative reCacheEvery",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+reCacheEvery = "-1m"
+cachedHostnames = ["foo"]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": "reCacheEvery" must not be negative`,
 	},
 	{
 		testName: "dnsQueue set and cachedHostnames not empty",
@@ -737,7 +751,7 @@ allowedHostnames = [
 					TrafficQueue: queue{
 						IPv4: 1001,
 					},
-					AllowAnswersFor: duration(5 * time.Second),
+					AllowAnswersFor: 5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -781,7 +795,7 @@ allowAllHostnames = true`,
 					TrafficQueue: queue{
 						IPv4: 1001,
 					},
-					AllowAnswersFor: duration(5 * time.Second),
+					AllowAnswersFor: 5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -836,7 +850,7 @@ cachedHostnames = [
 					TrafficQueue: queue{
 						IPv4: 1001,
 					},
-					ReCacheEvery: duration(time.Second),
+					ReCacheEvery: time.Second,
 					CachedHostnames: []string{
 						"oof",
 						"rab",
@@ -932,8 +946,8 @@ allowedHostnames = [
 					TrafficQueue: queue{
 						IPv4: 1001,
 					},
-					ReCacheEvery:    duration(time.Second),
-					AllowAnswersFor: duration(5 * time.Second),
+					ReCacheEvery:    time.Second,
+					AllowAnswersFor: 5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -992,7 +1006,7 @@ allowedHostnames = [
 						IPv4: 1001,
 					},
 					LookupUnknownIPs: true,
-					AllowAnswersFor:  duration(5 * time.Second),
+					AllowAnswersFor:  5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -1054,8 +1068,8 @@ allowedHostnames = [
 						IPv4: 1001,
 					},
 					LookupUnknownIPs: true,
-					ReCacheEvery:     duration(time.Second),
-					AllowAnswersFor:  duration(5 * time.Second),
+					ReCacheEvery:     time.Second,
+					AllowAnswersFor:  5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -1144,7 +1158,7 @@ allowAllHostnames = true`,
 						IPv4: 1001,
 						IPv6: 1011,
 					},
-					AllowAnswersFor: duration(5 * time.Second),
+					AllowAnswersFor: 5 * time.Second,
 					AllowedHostnames: []string{
 						"foo",
 						"bar",
@@ -1164,7 +1178,7 @@ allowAllHostnames = true`,
 						IPv4: 3001,
 						IPv6: 3011,
 					},
-					ReCacheEvery: duration(time.Second),
+					ReCacheEvery: time.Second,
 					CachedHostnames: []string{
 						"oof",
 						"rab",
