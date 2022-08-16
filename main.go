@@ -26,7 +26,33 @@ var (
 	printVersion      bool
 )
 
+func usage() {
+	fmt.Fprintf(os.Stderr, `
+Egress Eddie filters arbitrary outbound network traffic by hostname.
+
+	eddie-eddie [flags]
+	
+Egress Eddie filters DNS traffic and only allows requests and replies to
+specified hostnames. It then caches the IP addresses from allowed DNS replies
+and only allows traffic to go to them.
+
+Egress Eddie requires nftables/iptables rules to be set to function correctly;
+it will not modify firewall rules itself. For more information on how to
+correctly configure iptables to work with Egress Eddie and how to configure
+Egress Eddie itself see the GitHub link below.
+
+Egress Eddie accepts the following flags:
+
+`[1:])
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, `
+
+For more information, see https://github.com/capnspacehook/egress-eddie.
+`[1:])
+}
+
 func init() {
+	flag.Usage = usage
 	flag.StringVar(&configPath, "c", "egress-eddie.toml", "path of the config file")
 	flag.BoolVar(&debugLogs, "d", false, "enable debug logging")
 	flag.BoolVar(&logFullDNSPackets, "f", false, "enable full DNS packet logging")
@@ -43,6 +69,9 @@ func main() {
 		log.Fatal("build information not found")
 	}
 
+	if version == "" {
+		version = "devel"
+	}
 	if printVersion {
 		printVersionInfo(info)
 		os.Exit(0)
@@ -63,9 +92,6 @@ func main() {
 	}
 
 	var versionFields []zap.Field
-	if version == "" {
-		version = "devel"
-	}
 	versionFields = append(versionFields, zap.String("version", version))
 	for _, buildSetting := range info.Settings {
 		if buildSetting.Key == "vcs.revision" {
