@@ -702,6 +702,7 @@ func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, op
 	if verdict != opts.expectedVerdict {
 		failAndDumpConfig(t, cb, "expected verdict %d got %d", opts.expectedVerdict, verdict)
 	}
+	delete(e.verdicts, packetID)
 
 	packetID++
 }
