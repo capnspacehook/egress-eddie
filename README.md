@@ -1,5 +1,11 @@
 # egress-eddie
 
+![Tests](https://github.com/capnspacehook/egress-eddie/actions/workflows/test.yml/badge.svg)
+
+`go install github.com/capnspacehook/egress-eddie@latest`
+
+## Purpose
+
 Egress Eddie is a simple tool designed to do one thing: filter outbound traffic by hostname on Linux.
 Iptables and nftables both only let you filter by IP address, generally if you want to filter
 by hostname you need a proxy for the specific protocol you're trying to filter. But Egress Eddie
@@ -53,14 +59,6 @@ setcap 'cap_net_admin=+ep' egress-eddie
 Special permissions are needed to interface with nfqueue. 
 
 Alternatively, you *could* run Egress Eddie as root, though that is **not recommended** from a security standpoint.
-
-## Installing
-
-Either download the latest release or build the code yourself:
-
-```bash
-go install github.com/capnspacehook/egress-eddie@latest
-```
 
 # Configuration
 
