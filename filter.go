@@ -34,8 +34,7 @@ const (
 )
 
 type FilterManager struct {
-	ready chan struct{}
-	abort chan struct{}
+	signaler *signaler
 
 	started bool
 
@@ -52,12 +51,9 @@ type FilterManager struct {
 }
 
 type filter struct {
-	dnsReqReady  chan struct{}
-	dnsReqAbort  chan struct{}
-	genericReady chan struct{}
-	genericAbort chan struct{}
-	cachingReady chan struct{}
-	cachingAbort chan struct{}
+	dnsReqSignaler  *signaler
+	genericSignaler *signaler
+	cachingSignaler *signaler
 
 	started bool
 	wg      sync.WaitGroup
@@ -79,6 +75,34 @@ type filter struct {
 	additionalHostnames *TimedCache[string]
 
 	isSelfFilter bool
+}
+
+type signaler struct {
+	readyCh chan struct{}
+	abortCh chan struct{}
+}
+
+func newSignaler() *signaler {
+	return &signaler{
+		readyCh: make(chan struct{}),
+		abortCh: make(chan struct{}),
+	}
+}
+
+func (s *signaler) ready() {
+	close(s.readyCh)
+}
+
+func (s *signaler) isReady() <-chan struct{} {
+	return s.readyCh
+}
+
+func (s *signaler) abort() {
+	close(s.abortCh)
+}
+
+func (s *signaler) shouldAbort() <-chan struct{} {
+	return s.abortCh
 }
 
 // connectionID is used to correlate DNS requests and responses from
@@ -121,8 +145,7 @@ type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint
 // be used to start or stop packet filtering.
 func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, fullDNSLogging bool) (*FilterManager, error) {
 	f := FilterManager{
-		ready:          make(chan struct{}),
-		abort:          make(chan struct{}),
+		signaler:       newSignaler(),
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
 		queueNum4:      config.InboundDNSQueue.IPv4,
@@ -169,7 +192,7 @@ func (f *FilterManager) Start() {
 	// callback will be executing on another goroutine started by
 	// nfqueue.RegisterWithErrorFunc, but only after a packet is
 	// received on its nfqueue.
-	close(f.ready)
+	f.signaler.ready()
 
 	for i := range f.filters {
 		f.filters[i].start()
@@ -183,7 +206,7 @@ func (f *FilterManager) Stop() {
 	// if the filters have not been started yet, tell running goroutines
 	// to abort and finish
 	if !f.started {
-		close(f.abort)
+		f.signaler.abort()
 	}
 
 	if f.dnsRespNF4 != nil {
@@ -205,18 +228,15 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 	}
 
 	f := filter{
-		dnsReqReady:    make(chan struct{}),
-		dnsReqAbort:    make(chan struct{}),
-		genericReady:   make(chan struct{}),
-		genericAbort:   make(chan struct{}),
-		cachingReady:   make(chan struct{}),
-		cachingAbort:   make(chan struct{}),
-		opts:           opts,
-		fullDNSLogging: fullDNSLogging,
-		logger:         filterLogger,
-		res:            res,
-		connections:    NewTimedCache[connectionID](logger, true),
-		isSelfFilter:   isSelfFilter,
+		dnsReqSignaler:  newSignaler(),
+		genericSignaler: newSignaler(),
+		cachingSignaler: newSignaler(),
+		opts:            opts,
+		fullDNSLogging:  fullDNSLogging,
+		logger:          filterLogger,
+		res:             res,
+		connections:     NewTimedCache[connectionID](logger, true),
+		isSelfFilter:    isSelfFilter,
 	}
 
 	if opts.TrafficQueue.eitherSet() {
@@ -326,13 +346,13 @@ func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 
 
 func (f *filter) start() {
 	if f.opts.DNSQueue.eitherSet() {
-		close(f.dnsReqReady)
+		f.dnsReqSignaler.ready()
 	}
 	if f.opts.TrafficQueue.eitherSet() {
-		close(f.genericReady)
+		f.genericSignaler.ready()
 	}
 	if len(f.opts.CachedHostnames) > 0 {
-		close(f.cachingReady)
+		f.cachingSignaler.ready()
 	}
 
 	f.started = true
@@ -341,8 +361,8 @@ func (f *filter) start() {
 func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 	// wait until the filter manager is setup to prevent race conditions
 	select {
-	case <-f.cachingReady:
-	case <-f.cachingAbort:
+	case <-f.cachingSignaler.isReady():
+	case <-f.cachingSignaler.shouldAbort():
 		// the filter manager has been stopped before it was started,
 		// return so the parent filter can finish cleaning up
 		return
@@ -404,13 +424,13 @@ func (f *filter) close() {
 	// to abort and finish
 	if !f.started {
 		if f.opts.DNSQueue.eitherSet() {
-			close(f.dnsReqAbort)
+			f.dnsReqSignaler.abort()
 		}
 		if f.opts.TrafficQueue.eitherSet() {
-			close(f.genericAbort)
+			f.genericSignaler.abort()
 		}
 		if len(f.opts.CachedHostnames) > 0 {
-			close(f.cachingAbort)
+			f.cachingSignaler.abort()
 		}
 	}
 
@@ -453,10 +473,10 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
-		case <-f.dnsReqReady:
+		case <-f.dnsReqSignaler.isReady():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
-		case <-f.dnsReqAbort:
+		case <-f.dnsReqSignaler.shouldAbort():
 			return 0
 		}
 
@@ -654,8 +674,8 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
-		case <-f.ready:
-		case <-f.abort:
+		case <-f.signaler.isReady():
+		case <-f.signaler.shouldAbort():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
 			return 0
@@ -816,8 +836,8 @@ func newGenericCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
-		case <-f.genericReady:
-		case <-f.genericAbort:
+		case <-f.genericSignaler.isReady():
+		case <-f.genericSignaler.shouldAbort():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
 			return 0
