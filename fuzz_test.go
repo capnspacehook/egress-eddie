@@ -89,15 +89,15 @@ func FuzzFiltering(f *testing.F) {
 			disallowedName := "no" + allowedName + "no"
 
 			if filter.DNSQueue.eitherSet() {
-				checkBlockingDNSRequests(t, logger, cb, config, filter, false, disallowedIPv4Port, allowedName, disallowedName)
-				checkBlockingDNSRequests(t, logger, cb, config, filter, true, disallowedIPv6Port, allowedName, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, filter, false, disallowedIPv4Port, allowedName, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, filter, true, disallowedIPv6Port, allowedName, disallowedName)
 				checkAllowingDNS(t, logger, cb, config, filter, allowIPv4Port, allowIPv6Port, allowedName, disallowedName)
 
 				allowIPv4Port++
 				allowIPv6Port++
 			}
 
-			checkBlockingUnknownDNSReplies(t, logger, cb, config, filter, allowedName)
+			checkBlockingUnknownDNSReplies(t, logger, cb, config, allowedName)
 		}
 
 		for _, filter := range config.Filters {
@@ -107,7 +107,7 @@ func FuzzFiltering(f *testing.F) {
 				continue
 			}
 
-			checkHandlingTraffic(t, logger, cb, config, filter)
+			checkHandlingTraffic(t, logger, cb, filter)
 		}
 
 		cancel()
@@ -115,7 +115,7 @@ func FuzzFiltering(f *testing.F) {
 	})
 }
 
-func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
+func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
 	reqn := filter.DNSQueue.IPv4
 	qType := layers.DNSTypeA
 	answerIP := ipv4Answer
@@ -251,7 +251,7 @@ func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, confi
 	}
 }
 
-func checkBlockingUnknownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, allowedName string) {
+func checkBlockingUnknownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, allowedName string) {
 	check := func(ipv6 bool, n uint16) {
 		port := uint16(2001)
 		qType := layers.DNSTypeA
@@ -331,7 +331,7 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 	// want to race against the connection getting forgotten.
 	// The self filter only processes DNS responses so it won't
 	// have an allowed answers duration set.
-	attemptReplies := filter.DNSQueue == config.SelfDNSQueue || (filter.DNSQueue != config.SelfDNSQueue && time.Duration(filter.AllowAnswersFor) >= time.Millisecond)
+	attemptReplies := filter.DNSQueue == config.SelfDNSQueue || (filter.DNSQueue != config.SelfDNSQueue && filter.AllowAnswersFor >= time.Millisecond)
 	allowVerdict := filter.AllowAllHostnames || filter.DNSQueue.eitherSet()
 
 	check := func(ipv6 bool, reqn, rplyn uint16) {
@@ -426,7 +426,7 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 					expectedVerdict: nfqueue.NfAccept,
 				})
 
-				checkBlockingDNSRequests(t, logger, cb, config, filter, ipv6, port, allowedCNAME, disallowedName)
+				checkBlockingDNSRequests(t, logger, cb, filter, ipv6, port, allowedCNAME, disallowedName)
 			}
 		}
 	}
@@ -508,11 +508,11 @@ func checkBlockingKnownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, c
 	}
 }
 
-func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions) {
+func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, filter FilterOptions) {
 	// If answers are allowed for too short of a time, we don't
 	// want to race against the connection getting forgotten.
 	// TODO: test reverse lookups
-	allowVerdict := filter.DNSQueue.eitherSet() && time.Duration(filter.AllowAnswersFor) >= time.Millisecond
+	allowVerdict := filter.DNSQueue.eitherSet() && filter.AllowAnswersFor >= time.Millisecond
 
 	check := func(ipv6 bool, n uint16) {
 		localhostIP := ipv4Localhost

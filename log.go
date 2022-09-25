@@ -66,7 +66,9 @@ type dnsQuestions []layers.DNSQuestion
 
 func (q dnsQuestions) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range q {
-		enc.AppendObject(dnsQuestion(q[i]))
+		if err := enc.AppendObject(dnsQuestion(q[i])); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -85,7 +87,9 @@ type dnsRecords []layers.DNSResourceRecord
 
 func (r dnsRecords) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range r {
-		enc.AppendObject(dnsRecord(r[i]))
+		if err := enc.AppendObject(dnsRecord(r[i])); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -105,7 +109,10 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("pref", r.MX.Preference)
 		enc.AddByteString("name", r.MX.Name)
 	case layers.DNSTypeOPT:
-		enc.AddArray("opts", dnsOpts(r.OPT))
+		err := enc.AddArray("opts", dnsOpts(r.OPT))
+		if err != nil {
+			return err
+		}
 	case layers.DNSTypePTR:
 		enc.AddByteString("name", r.PTR)
 	case layers.DNSTypeSOA:
@@ -122,7 +129,10 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("port", r.SRV.Port)
 		enc.AddByteString("name", r.SRV.Name)
 	case layers.DNSTypeTXT:
-		enc.AddArray("data", dnsTXTs(r.TXTs))
+		err := enc.AddArray("data", dnsTXTs(r.TXTs))
+		if err != nil {
+			return err
+		}
 	case layers.DNSTypeURI:
 		enc.AddUint16("priority", r.URI.Priority)
 		enc.AddUint16("weight", r.URI.Weight)
@@ -138,7 +148,9 @@ type dnsOpts []layers.DNSOPT
 
 func (o dnsOpts) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range o {
-		enc.AppendObject(dnsOpt(o[i]))
+		if err := enc.AppendObject(dnsOpt(o[i])); err != nil {
+			return err
+		}
 	}
 
 	return nil

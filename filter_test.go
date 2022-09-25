@@ -404,7 +404,10 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 	client4, client6 := getHTTPClients()
 
 	stop := func() {
-		eddieCmd.Process.Signal(os.Interrupt)
+		err := eddieCmd.Process.Signal(os.Interrupt)
+		if err != nil {
+			t.Errorf("error killing egress eddie process: %v", err)
+		}
 
 		if err := eddieCmd.Wait(); err != nil {
 			var exitErr *exec.ExitError
@@ -510,7 +513,8 @@ func reqFailed(err error) bool {
 		return true
 	}
 
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 

@@ -227,7 +227,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 			return newGenericCallback(&f, ipv6)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error starting traffic nfqueues: %v", err)
+			return nil, fmt.Errorf("error starting traffic nfqueues: %w", err)
 		}
 		f.genericNF4 = nf4
 		f.genericNF6 = nf6
@@ -247,7 +247,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 			return newDNSRequestCallback(&f, ipv6)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error starting DNS nfqueues: %v", err)
+			return nil, fmt.Errorf("error starting DNS nfqueues: %w", err)
 		}
 		f.dnsReqNF4 = nf4
 		f.dnsReqNF6 = nf6
@@ -291,7 +291,7 @@ func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 
 
 	nf, err := nfqueue.Open(&nfqConf)
 	if err != nil {
-		return nil, fmt.Errorf("error opening nfqueue: %v", err)
+		return nil, fmt.Errorf("error opening nfqueue: %w", err)
 	}
 
 	// close the nfqueue connection in case of an error
@@ -308,15 +308,15 @@ func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 
 	// doesn't support that option.
 	err = nf.Con.SetOption(netlink.ExtendedAcknowledge, true)
 	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
-		return nil, fmt.Errorf("error setting ExtendedAcknowledge netlink option: %v", err)
+		return nil, fmt.Errorf("error setting ExtendedAcknowledge netlink option: %w", err)
 	}
 	err = nf.Con.SetOption(netlink.GetStrictCheck, true)
 	if err != nil && !errors.Is(err, unix.ENOPROTOOPT) {
-		return nil, fmt.Errorf("error setting GetStrictCheck netlink option: %v", err)
+		return nil, fmt.Errorf("error setting GetStrictCheck netlink option: %w", err)
 	}
 
 	if err := nf.RegisterWithErrorFunc(ctx, hook, newErrorCallback(logger)); err != nil {
-		return nil, fmt.Errorf("error registering nfqueue: %v", err)
+		return nil, fmt.Errorf("error registering nfqueue: %w", err)
 	}
 
 	ok = true
@@ -508,7 +508,7 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
-		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(logger, dns) {
+		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(dns) {
 			logger.Warn("dropping DNS request", dnsFields(dns, f.fullDNSLogging)...)
 			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 				logger.Error("error setting verdict", zap.NamedError("error", err))
@@ -603,7 +603,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 	return &dns, connID, nil
 }
 
-func (f *filter) validateDNSQuestions(logger *zap.Logger, dns *layers.DNS) bool {
+func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
 	if dns.QDCount == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
@@ -729,7 +729,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// hostnames should never happen in theory, because we
 			// block requests for disallowed hostnames but it doesn't
 			// hurt to check
-			if !connFilter.validateDNSQuestions(logger, dns) {
+			if !connFilter.validateDNSQuestions(dns) {
 				logger.Info("dropping DNS reply", dnsFields(dns, f.fullDNSLogging)...)
 				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
 					logger.Error("error setting verdict", zap.NamedError("error", err))
