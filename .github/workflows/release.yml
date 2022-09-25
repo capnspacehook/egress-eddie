@@ -2,6 +2,7 @@ on:
   release:
     types: [created]
 
+name: Release
 jobs:
   release-linux-amd64:
     name: release linux/amd64

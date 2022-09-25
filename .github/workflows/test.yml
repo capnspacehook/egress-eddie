@@ -11,44 +11,44 @@ jobs:
   race-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@v3
-      with:
-        go-version: 1.19.x
+      - uses: actions/setup-go@v3
+        with:
+          go-version: 1.19.x
 
-    # the test is compiled and run as root so that egress eddie can
-    # open nfqueues, which is a privileged operation
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - run: |
-        go test -c -race -o egress-eddie.test
-        sudo ./egress-eddie.test -enable-ipv6=false -test.v -test.failfast
+      # the test is compiled and run as root so that egress eddie can
+      # open nfqueues, which is a privileged operation
+      - run: |
+          go test -c -race -o egress-eddie.test
+          sudo ./egress-eddie.test -enable-ipv6=false -test.v -test.failfast
 
   binary-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@v3
-      with:
-        go-version: 1.19.x
+      - uses: actions/setup-go@v3
+        with:
+          go-version: 1.19.x
 
-    # run the same tests as above but use a separate compiled binary to
-    # process packets to test with landlock and seccomp filters active
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - run: |
-        CGO_ENABLED=0 go build -o eddie
-        go test -c -o egress-eddie.test
-        sudo ./egress-eddie.test -binary-tests -eddie-binary ./eddie -enable-ipv6=false -test.v -test.failfast
+      # run the same tests as above but use a separate compiled binary to
+      # process packets to test with landlock and seccomp filters active
+      - run: |
+          CGO_ENABLED=0 go build -o eddie
+          go test -c -o egress-eddie.test
+          sudo ./egress-eddie.test -binary-tests -eddie-binary ./eddie -enable-ipv6=false -test.v -test.failfast
 
   fuzz:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/setup-go@v3
-      with:
-        go-version: 1.19.x
+      - uses: actions/setup-go@v3
+        with:
+          go-version: 1.19.x
 
-    - uses: actions/checkout@v3
-      with:
-        submodules: true
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
 
-    - run: |
-        go test -fuzz Fuzz -run Config -fuzztime 10m
+      - run: |
+          go test -fuzz Fuzz -run Config -fuzztime 10m
