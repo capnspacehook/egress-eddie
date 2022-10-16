@@ -56,7 +56,7 @@ func init() {
 	flag.StringVar(&configPath, "c", "egress-eddie.toml", "path of the config file")
 	flag.BoolVar(&debugLogs, "d", false, "enable debug logging")
 	flag.BoolVar(&logFullDNSPackets, "f", false, "enable full DNS packet logging")
-	flag.StringVar(&logPath, "l", "egress-eddie.log", "path to log to")
+	flag.StringVar(&logPath, "l", "stdout", "path to log to")
 	flag.BoolVar(&testConfig, "t", false, "validate the config and exit")
 	flag.BoolVar(&printVersion, "version", false, "print version and build information and exit")
 }
