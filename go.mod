@@ -3,7 +3,7 @@ module github.com/capnspacehook/egress-eddie
 go 1.18
 
 require (
-	github.com/BurntSushi/toml v1.2.0
+	github.com/BurntSushi/toml v1.2.1
 	github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff
 	github.com/google/gopacket v1.1.19
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
