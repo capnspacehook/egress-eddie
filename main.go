@@ -17,15 +17,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var (
-	configPath        string
-	debugLogs         bool
-	logFullDNSPackets bool
-	logPath           string
-	testConfig        bool
-	printVersion      bool
-)
-
 func usage() {
 	fmt.Fprintf(os.Stderr, `
 Egress Eddie filters arbitrary outbound network traffic by hostname.
@@ -51,17 +42,14 @@ For more information, see https://github.com/capnspacehook/egress-eddie.
 `[1:])
 }
 
-func init() {
-	flag.Usage = usage
-	flag.StringVar(&configPath, "c", "egress-eddie.toml", "path of the config file")
-	flag.BoolVar(&debugLogs, "d", false, "enable debug logging")
-	flag.BoolVar(&logFullDNSPackets, "f", false, "enable full DNS packet logging")
-	flag.StringVar(&logPath, "l", "stdout", "path to log to")
-	flag.BoolVar(&testConfig, "t", false, "validate the config and exit")
-	flag.BoolVar(&printVersion, "version", false, "print version and build information and exit")
-}
-
 func main() {
+	flag.Usage = usage
+	configPath := flag.String("c", "egress-eddie.toml", "path of the config file")
+	debugLogs := flag.Bool("d", false, "enable debug logging")
+	logFullDNSPackets := flag.Bool("f", false, "enable full DNS packet logging")
+	logPath := flag.String("l", "stdout", "path to log to")
+	validateConfig := flag.Bool("t", false, "validate the config and exit")
+	printVersion := flag.Bool("version", false, "print version and build information and exit")
 	flag.Parse()
 
 	info, ok := debug.ReadBuildInfo()
@@ -69,14 +57,14 @@ func main() {
 		log.Fatal("build information not found")
 	}
 
-	if printVersion {
+	if *printVersion {
 		printVersionInfo(info)
 		os.Exit(0)
 	}
 
 	logCfg := zap.NewProductionConfig()
-	logCfg.OutputPaths = []string{logPath}
-	if debugLogs {
+	logCfg.OutputPaths = []string{*logPath}
+	if *debugLogs {
 		logCfg.Level.SetLevel(zap.DebugLevel)
 	}
 	logCfg.EncoderConfig.TimeKey = "time"
@@ -103,8 +91,8 @@ func main() {
 		}
 	}
 
-	config, err := ParseConfig(configPath)
-	if testConfig {
+	config, err := ParseConfig(*configPath)
+	if *validateConfig {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error parsing config: %v\n", err)
 			os.Exit(1)
@@ -124,9 +112,9 @@ func main() {
 	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
 	if !needsNetworking {
 		var allowedPaths []landlock.PathOpt
-		if logPath != "stdout" && logPath != "stderr" {
+		if *logPath != "stdout" && *logPath != "stderr" {
 			allowedPaths = []landlock.PathOpt{
-				landlock.PathAccess(llsyscall.AccessFSWriteFile, logPath),
+				landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
 			}
 		}
 
@@ -143,7 +131,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := CreateFilters(ctx, logger, config, logFullDNSPackets)
+	filters, err := CreateFilters(ctx, logger, config, *logFullDNSPackets)
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}
