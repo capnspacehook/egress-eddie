@@ -69,9 +69,6 @@ func main() {
 		log.Fatal("build information not found")
 	}
 
-	if version == "" {
-		version = "devel"
-	}
 	if printVersion {
 		printVersionInfo(info)
 		os.Exit(0)
