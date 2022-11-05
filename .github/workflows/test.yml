@@ -35,7 +35,7 @@ jobs:
       # open nfqueues, which is a privileged operation
       - run: |
           go test -c -race -o egress-eddie.test
-          sudo ./egress-eddie.test -enable-ipv6=false -test.v -test.timeout 5m
+          sudo ./egress-eddie.test -enable-ipv6=false -test.timeout 5m -test.v
 
   binary-test:
     runs-on: ubuntu-latest
@@ -53,9 +53,9 @@ jobs:
       # run the same tests as above but use a separate compiled binary to
       # process packets to test with landlock and seccomp filters active
       - run: |
-          CGO_ENABLED=0 go build -o eddie
+          CGO_ENABLED=0 go build -o egress-eddie
           go test -c -o egress-eddie.test
-          sudo ./egress-eddie.test -binary-tests -eddie-binary ./eddie -enable-ipv6=false -test.v -test.timeout 5m
+          sudo ./egress-eddie.test -binary-tests -enable-ipv6=false -test.timeout 5m -test.v
 
   fuzz:
     runs-on: ubuntu-latest
