@@ -65,14 +65,14 @@ var allowedSyscalls = seccomp.SyscallRules{
 	},
 	unix.SYS_FSTAT: {},
 	unix.SYS_FUTEX: {
-		seccomp.Rule{
+		{
 			seccomp.MatchAny{},
 			seccomp.EqualTo(linux.FUTEX_WAIT | linux.FUTEX_PRIVATE_FLAG),
 			seccomp.MatchAny{},
 			seccomp.MatchAny{},
 			seccomp.EqualTo(0),
 		},
-		seccomp.Rule{
+		{
 			seccomp.MatchAny{},
 			seccomp.EqualTo(linux.FUTEX_WAKE | linux.FUTEX_PRIVATE_FLAG),
 			seccomp.MatchAny{},
@@ -143,8 +143,8 @@ var allowedSyscalls = seccomp.SyscallRules{
 			seccomp.EqualTo(uint64(os.Getpid())),
 		},
 	},
-	unix.SYS_UNAME: {},
 	unix.SYS_WRITE: {},
+	unix.SYS_UNAME: {},
 }
 
 var networkSyscalls = seccomp.SyscallRules{
@@ -214,5 +214,5 @@ func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error
 	// disable logging from seccomp package
 	log.SetTarget(&nullEmitter{})
 
-	return len(allowedSyscalls), seccomp.Install(allowedSyscalls, nil)
+	return len(allowedSyscalls), seccomp.Install(allowedSyscalls, seccomp.DenyNewExecMappings)
 }
