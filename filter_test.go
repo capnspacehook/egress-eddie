@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,8 +23,10 @@ import (
 )
 
 var (
-	binaryTests = flag.Bool("binary-tests", false, "use compiled binary to test with landlock and seccomp enabled")
-	eddieBinary = flag.String("eddie-binary", "./egress-eddie", "path to compiled egress-eddie binary")
+	binaryTests    = flag.Bool("binary-tests", false, "use compiled binary to test with landlock and seccomp enabled")
+	containerTests = flag.Bool("container-tests", false, "use Docker image to test with landlock and seccomp enabled")
+	eddieBinary    = flag.String("eddie-binary", "./egress-eddie", "path to compiled egress-eddie binary")
+	eddieImage     = flag.String("eddie-image", "egress-eddie:test", "Docker image to test with")
 	// Github hosted runners don't support IPv6, so can't test with IPv6
 	// in Github Actions
 	// see https://github.com/actions/runner-images/issues/668
@@ -49,7 +53,7 @@ allowedHostnames = [
 	"twitter.com",
 ]`
 
-	client4, client6 := initFilters(
+	initFilters(
 		t,
 		configStr,
 		[]string{
@@ -63,6 +67,7 @@ allowedHostnames = [
 			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
+	client4, client6 := getHTTPClients()
 
 	is := is.New(t)
 
@@ -153,7 +158,7 @@ dnsQueue.ipv4 = 1000
 dnsQueue.ipv6 = 1010
 allowAllHostnames = true`
 
-	client4, client6 := initFilters(
+	initFilters(
 		t,
 		configStr,
 		[]string{
@@ -165,6 +170,7 @@ allowAllHostnames = true`
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
 		},
 	)
+	client4, client6 := getHTTPClients()
 
 	is := is.New(t)
 
@@ -193,7 +199,7 @@ cachedHostnames = [
 	addrs, err := net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "digitalocean.com")
 	is.NoErr(err)
 
-	client4, _ := initFilters(
+	initFilters(
 		t,
 		configStr,
 		[]string{
@@ -207,6 +213,7 @@ cachedHostnames = [
 			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
+	client4, _ := getHTTPClients()
 
 	// wait until hostnames responses are cached by filters
 	time.Sleep(3 * time.Second)
@@ -310,21 +317,23 @@ allowedHostnames = [
 	})
 }
 
-func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client) {
-	if *binaryTests {
-		return initBinaryFilters(t, configStr, iptablesRules, ip6tablesRules)
+func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	switch {
+	case *binaryTests:
+		initBinaryFilters(t, configStr, iptablesRules, ip6tablesRules)
+	case *containerTests:
+		initContainerFilters(t, configStr, ip6tablesRules, ip6tablesRules)
+	default:
+		initStandardFilters(t, configStr, iptablesRules, ip6tablesRules)
 	}
-	return initStandardFilters(t, configStr, iptablesRules, ip6tablesRules)
 }
 
-func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client) {
-	f, err := os.CreateTemp("", "egress_eddie")
+func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	f, err := os.Create(configPath)
 	if err != nil {
 		t.Fatalf("error creating config file: %v", err)
 	}
-	configPath := f.Name()
-	t.Cleanup(func() { os.Remove(configPath) })
-
 	if _, err = f.Write([]byte(configStr)); err != nil {
 		t.Fatalf("error writing config file: %v", err)
 	}
@@ -342,7 +351,7 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 		iptablesCmd(t, true, command)
 	}
 
-	eddieCmd := exec.Command(*eddieBinary, "-c", configPath, "-d", "-f", "-l", "stdout")
+	eddieCmd := exec.Command(*eddieBinary, "-c", configPath, "-d", "-f")
 	eddieCmd.Stdout = os.Stdout
 	eddieCmd.Stderr = os.Stderr
 	if err := eddieCmd.Start(); err != nil {
@@ -350,8 +359,6 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 	}
 
 	time.Sleep(time.Second)
-
-	client4, client6 := getHTTPClients()
 
 	t.Cleanup(func() {
 		err := eddieCmd.Process.Signal(os.Interrupt)
@@ -365,16 +372,73 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 				t.Errorf("egress eddie exited with error: %v", err)
 			}
 		}
-		os.Remove(configPath)
 
 		iptablesCmd(t, false, "-F")
 		iptablesCmd(t, true, "-F")
 	})
-
-	return client4, client6
 }
 
-func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) (*http.Client, *http.Client) {
+func initContainerFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	f, err := os.Create(configPath)
+	if err != nil {
+		t.Fatalf("error creating config file: %v", err)
+	}
+	if _, err = f.Write([]byte(configStr)); err != nil {
+		t.Fatalf("error writing config file: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("error closing config file: %v", err)
+	}
+
+	for _, command := range iptablesRules {
+		iptablesCmd(t, false, command)
+	}
+
+	for _, command := range ip6tablesRules {
+		iptablesCmd(t, true, command)
+	}
+
+	volume := fmt.Sprintf("-v=%s:/config.toml:ro", configPath)
+	dockerCmd := exec.Command(
+		"docker",
+		"run",
+		"--cap-add=NET_ADMIN",
+		"--net=host",
+		volume,
+		"--rm",
+		*eddieImage,
+		"-c=/config.toml",
+		"-d",
+		"-f",
+	)
+	dockerCmd.Stdout = os.Stdout
+	dockerCmd.Stderr = os.Stderr
+	if err := dockerCmd.Start(); err != nil {
+		t.Fatalf("error starting egress eddie container: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	t.Cleanup(func() {
+		err := dockerCmd.Process.Signal(os.Interrupt)
+		if err != nil {
+			t.Errorf("error killing egress eddie container: %v", err)
+		}
+
+		if err := dockerCmd.Wait(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				t.Errorf("egress eddie exited with container: %v", err)
+			}
+		}
+
+		iptablesCmd(t, false, "-F")
+		iptablesCmd(t, true, "-F")
+	})
+}
+
+func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
 	config, err := parseConfigBytes([]byte(configStr))
 	if err != nil {
 		t.Fatalf("error parsing config: %v", err)
@@ -409,16 +473,12 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6table
 	}
 	filters.Start()
 
-	client4, client6 := getHTTPClients()
-
 	t.Cleanup(func() {
 		cancel()
 		filters.Stop()
 		iptablesCmd(t, false, "-F")
 		iptablesCmd(t, true, "-F")
 	})
-
-	return client4, client6
 }
 
 func iptablesCmd(t *testing.T, ipv6 bool, args string) {

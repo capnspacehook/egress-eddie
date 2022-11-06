@@ -577,7 +577,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		return nil, connectionID{}, err
 	}
 	if len(decoded) != 3 {
-		return nil, connectionID{}, errors.New("not all layers were parsed")
+		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 3", len(decoded))
 	}
 
 	// build connection ID so dns requests/responses can be correlated
