@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	// only needed for go:linkname directive
 	_ "unsafe"
 
 	"github.com/BurntSushi/toml"
