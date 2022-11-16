@@ -1,4 +1,4 @@
-package main
+package timedcache
 
 import (
 	"sync"
@@ -36,12 +36,12 @@ const (
 	stop                     // signals that the goroutine should finish
 )
 
-// NewTimedCache creates a new timed cache. If count is true, entries will
-// take n RemoveEntry calls to be manually removed from the cache where n
+// New creates a new timed cache. If count is true, entries will take
+// n RemoveEntry calls to be manually removed from the cache where n
 // is the number of times AddEntry is called with the same entry.
 // Entries will be removed from the cache when the deadline is reached
 // regardless of whether the cache is a counting cache or not.
-func NewTimedCache[T comparable](logger *zap.Logger, count bool) *TimedCache[T] {
+func New[T comparable](logger *zap.Logger, count bool) *TimedCache[T] {
 	var t TimedCache[T]
 
 	t.logger = logger

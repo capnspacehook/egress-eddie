@@ -1,4 +1,4 @@
-package main
+package egresseddie
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"github.com/mdlayher/netlink"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+
+	"github.com/capnspacehook/egress-eddie/timedcache"
 )
 
 const (
@@ -70,9 +72,9 @@ type filter struct {
 
 	res resolver
 
-	connections         *TimedCache[connectionID]
-	allowedIPs          *TimedCache[netip.Addr]
-	additionalHostnames *TimedCache[string]
+	connections         *timedcache.TimedCache[connectionID]
+	allowedIPs          *timedcache.TimedCache[netip.Addr]
+	additionalHostnames *timedcache.TimedCache[string]
 
 	isSelfFilter bool
 }
@@ -235,13 +237,13 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
 		res:             res,
-		connections:     NewTimedCache[connectionID](logger, true),
+		connections:     timedcache.New[connectionID](logger, true),
 		isSelfFilter:    isSelfFilter,
 	}
 
 	if opts.TrafficQueue.eitherSet() {
-		f.allowedIPs = NewTimedCache[netip.Addr](f.logger, false)
-		f.additionalHostnames = NewTimedCache[string](filterLogger, false)
+		f.allowedIPs = timedcache.New[netip.Addr](f.logger, false)
+		f.additionalHostnames = timedcache.New[string](filterLogger, false)
 
 		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, func(ipv6 bool) nfqueue.HookFunc {
 			return newGenericCallback(&f, ipv6)

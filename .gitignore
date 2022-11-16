@@ -6,5 +6,4 @@
 *.sh
 *.test
 
-eddie
-egress-eddie
+./cmd/egress-eddie/egress-eddie

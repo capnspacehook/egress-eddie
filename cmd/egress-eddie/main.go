@@ -15,6 +15,8 @@ import (
 	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	egresseddie "github.com/capnspacehook/egress-eddie"
 )
 
 func usage() {
@@ -88,7 +90,7 @@ func main() {
 	}
 	logger.Info("starting Egress Eddie", versionFields...)
 
-	config, err := ParseConfig(*configPath)
+	config, err := egresseddie.ParseConfig(*configPath)
 	if *validateConfig {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error parsing config: %v\n", err)
@@ -128,7 +130,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := CreateFilters(ctx, logger, config, *logFullDNSPackets)
+	filters, err := egresseddie.CreateFilters(ctx, logger, config, *logFullDNSPackets)
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}
