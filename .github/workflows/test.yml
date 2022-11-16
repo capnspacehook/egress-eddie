@@ -53,7 +53,9 @@ jobs:
       # run the same tests as above but use a binary to process packets
       # to test with landlock and seccomp filters active
       - run: |
-          CGO_ENABLED=0 go build -o egress-eddie
+          cd cmd/egress-eddie
+          CGO_ENABLED=0 go build -o ../../egress-eddie
+          cd ../../
           go test -c -o egress-eddie.test
           sudo ./egress-eddie.test -binary-tests -enable-ipv6=false -test.timeout 5m -test.v
 
