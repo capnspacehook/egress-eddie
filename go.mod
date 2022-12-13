@@ -7,7 +7,7 @@ require (
 	github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff
 	github.com/google/gopacket v1.1.19
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
-	github.com/mdlayher/netlink v1.7.0
+	github.com/mdlayher/netlink v1.7.1
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
 	golang.org/x/sys v0.3.0
