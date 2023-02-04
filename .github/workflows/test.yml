@@ -10,15 +10,17 @@ on:
 
   workflow_dispatch: {}
 
-env:
-  GO_VERSION: "1.19"
-
 jobs:
   race-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Export constant environmental variables
+        uses: cardinalby/export-env-action@v2
+        with:
+          envFile: .github/workflows/constants.env
 
       - name: Install Go
         uses: actions/setup-go@v3
@@ -43,6 +45,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Export constant environmental variables
+        uses: cardinalby/export-env-action@v2
+        with:
+          envFile: .github/workflows/constants.env
+
       - name: Install Go
         uses: actions/setup-go@v3
         with:
@@ -64,6 +71,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+
+      - name: Export constant environmental variables
+        uses: cardinalby/export-env-action@v2
+        with:
+          envFile: .github/workflows/constants.env
 
       - name: Install Go
         uses: actions/setup-go@v3
