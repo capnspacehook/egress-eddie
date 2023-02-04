@@ -2,7 +2,7 @@
 
 ![Tests](https://github.com/capnspacehook/egress-eddie/actions/workflows/test.yml/badge.svg)
 
-`go install github.com/capnspacehook/egress-eddie@latest`
+`go install github.com/capnspacehook/egress-eddie/cmd/egress-eddie@latest`
 
 ## Purpose
 
