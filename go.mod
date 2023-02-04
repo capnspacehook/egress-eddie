@@ -11,7 +11,7 @@ require (
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
 	golang.org/x/sys v0.4.0
-	gvisor.dev/gvisor v0.0.0-20220706205639-118a2001295b
+	gvisor.dev/gvisor v0.0.0-20221108212141-79965837f088
 )
 
 // Test dependencies
