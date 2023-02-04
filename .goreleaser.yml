@@ -19,7 +19,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X "main.version={{ .Tag }}"
-    cmd: ./cmd/egress-eddie
+    main: ./cmd/egress-eddie
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:
