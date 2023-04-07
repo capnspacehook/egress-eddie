@@ -24,7 +24,7 @@ func initMockEnforcers() {
 	mockEnforcers = make(map[uint16]*mockEnforcer)
 }
 
-func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (enforcer, error) {
+func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, _ bool, hook nfqueue.HookFunc) (enforcer, error) {
 	if _, ok := mockEnforcers[queueNum]; ok {
 		return nil, fmt.Errorf("a nfqueue with the queue number %d has already been started", queueNum)
 	}
@@ -77,7 +77,7 @@ func (m *mockResolver) LookupNetIP(_ context.Context, _ string, host string) ([]
 	return nil, &net.DNSError{IsNotFound: true}
 }
 
-func (m *mockResolver) LookupAddr(ctx context.Context, addr string) ([]string, error) {
+func (m *mockResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
 	if m.hostnames == nil {
 		return nil, &net.DNSError{IsNotFound: true}
 	}
