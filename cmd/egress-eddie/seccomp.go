@@ -200,7 +200,7 @@ var networkSyscalls = seccomp.SyscallRules{
 
 type nullEmitter struct{}
 
-func (nullEmitter) Emit(depth int, level log.Level, timestamp time.Time, format string, v ...interface{}) {
+func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...interface{}) {
 }
 
 func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error) {
