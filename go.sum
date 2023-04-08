@@ -6,8 +6,8 @@ github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLj
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff h1:rn3KQ78hnep53Enrh7wvs554C2OsVIcthgsMnPY6GOk=
-github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff/go.mod h1:aHWbgkhryJxF5XxYvJ3oRZpdD4JP74Zu/hP1zuhja+M=
+github.com/florianl/go-nfqueue v1.3.1 h1:khQ9fYCrjbu5CF8dZF55G2RTIEIQRI0Aj5k3msJR6Gw=
+github.com/florianl/go-nfqueue v1.3.1/go.mod h1:aHWbgkhryJxF5XxYvJ3oRZpdD4JP74Zu/hP1zuhja+M=
 github.com/google/go-cmp v0.5.6/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
 github.com/google/go-cmp v0.5.7/go.mod h1:n+brtR0CgQNWTVd5ZUFpTBC8YFBDLK/h/bpaJ8/DtOE=
 github.com/google/go-cmp v0.5.9 h1:O2Tfq5qg4qc4AmwVlvv0oLiVAGB7enBSJ2x2DqQFi38=
