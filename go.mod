@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/BurntSushi/toml v1.2.1
-	github.com/florianl/go-nfqueue v1.3.1-0.20220325083416-d7801b74b0ff
+	github.com/florianl/go-nfqueue v1.3.1
 	github.com/google/gopacket v1.1.19
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
 	github.com/mdlayher/netlink v1.7.1
