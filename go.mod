@@ -8,7 +8,7 @@ require (
 	github.com/google/gopacket v1.1.19
 	github.com/landlock-lsm/go-landlock v0.0.0-20211207181312-ab929acf048a
 	github.com/mdlayher/netlink v1.7.1
-	go.uber.org/zap v1.24.0
+	go.uber.org/zap v1.26.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
 	golang.org/x/sys v0.14.0
 	gvisor.dev/gvisor v0.0.0-20230811195211-463ea554e02f
@@ -26,8 +26,7 @@ require (
 	github.com/josharian/native v1.0.0 // indirect
 	github.com/mdlayher/socket v0.4.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	go.uber.org/atomic v1.10.0 // indirect
-	go.uber.org/multierr v1.8.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/net v0.5.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
 	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
