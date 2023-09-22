@@ -7,9 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	// only needed for go:linkname directive
-	_ "unsafe"
+	_ "unsafe" // only needed for go:linkname directive
 
 	"github.com/BurntSushi/toml"
 	"golang.org/x/exp/slices"

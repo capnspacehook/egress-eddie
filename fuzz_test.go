@@ -116,6 +116,8 @@ func FuzzFiltering(f *testing.F) {
 }
 
 func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
+	t.Helper()
+
 	reqn := filter.DNSQueue.IPv4
 	qType := layers.DNSTypeA
 	answerIP := ipv4Answer
@@ -252,6 +254,8 @@ func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, filte
 }
 
 func checkBlockingUnknownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, allowedName string) {
+	t.Helper()
+
 	check := func(ipv6 bool, n uint16) {
 		port := uint16(2001)
 		qType := layers.DNSTypeA
@@ -327,6 +331,8 @@ func checkBlockingUnknownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte,
 }
 
 func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ip4Port, ip6Port uint16, allowedName, disallowedName string) {
+	t.Helper()
+
 	// If answers are allowed for too short of a time, we don't
 	// want to race against the connection getting forgotten.
 	// The self filter only processes DNS responses so it won't
@@ -440,6 +446,8 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 }
 
 func checkBlockingKnownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, config *Config, filter FilterOptions, ipv6 bool, port uint16, allowedName, disallowedName string) {
+	t.Helper()
+
 	n := config.InboundDNSQueue.IPv4
 	rType := layers.DNSTypeA
 	answerIP := ipv4Answer
@@ -509,6 +517,8 @@ func checkBlockingKnownDNSReplies(t *testing.T, logger *zap.Logger, cb []byte, c
 }
 
 func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, filter FilterOptions) {
+	t.Helper()
+
 	// If answers are allowed for too short of a time, we don't
 	// want to race against the connection getting forgotten.
 	// TODO: test reverse lookups
@@ -579,6 +589,8 @@ func checkHandlingTraffic(t *testing.T, logger *zap.Logger, cb []byte, filter Fi
 }
 
 func failAndDumpConfig(t *testing.T, cb []byte, format string, a ...any) {
+	t.Helper()
+
 	t.Logf("config:\n---\n%s\n---\n\n", cb)
 	panic(fmt.Sprintf(format, a...))
 }
@@ -612,6 +624,8 @@ var (
 )
 
 func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, opts sendOpts) {
+	t.Helper()
+
 	var (
 		ipLayer         gopacket.SerializableLayer
 		ipLayerType     = layers.IPProtocolIPv4

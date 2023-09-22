@@ -318,6 +318,8 @@ allowedHostnames = [
 }
 
 func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	t.Helper()
+
 	switch {
 	case *binaryTests:
 		initBinaryFilters(t, configStr, iptablesRules, ip6tablesRules)
@@ -329,12 +331,14 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 }
 
 func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	t.Helper()
+
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	f, err := os.Create(configPath)
 	if err != nil {
 		t.Fatalf("error creating config file: %v", err)
 	}
-	if _, err = f.Write([]byte(configStr)); err != nil {
+	if _, err = f.WriteString(configStr); err != nil {
 		t.Fatalf("error writing config file: %v", err)
 	}
 	if err := f.Close(); err != nil {
@@ -379,12 +383,14 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 }
 
 func initContainerFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	t.Helper()
+
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	f, err := os.Create(configPath)
 	if err != nil {
 		t.Fatalf("error creating config file: %v", err)
 	}
-	if _, err = f.Write([]byte(configStr)); err != nil {
+	if _, err = f.WriteString(configStr); err != nil {
 		t.Fatalf("error writing config file: %v", err)
 	}
 	if err := f.Close(); err != nil {
@@ -439,6 +445,8 @@ func initContainerFilters(t *testing.T, configStr string, iptablesRules, ip6tabl
 }
 
 func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+	t.Helper()
+
 	config, err := parseConfigBytes([]byte(configStr))
 	if err != nil {
 		t.Fatalf("error parsing config: %v", err)
@@ -482,6 +490,8 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6table
 }
 
 func iptablesCmd(t *testing.T, ipv6 bool, args string) {
+	t.Helper()
+
 	splitArgs, err := shlex.Split(args, true)
 	if err != nil {
 		t.Fatalf("error spitting command %v: %v", args, err)
@@ -549,6 +559,8 @@ func makeHTTPReqs(client4, client6 *http.Client, addr string) error {
 }
 
 func lookupIPs(t *testing.T, host string) (ips4 []netip.Addr, ips6 []netip.Addr, err error) {
+	t.Helper()
+
 	ips4, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", host)
 	if err != nil {
 		return nil, nil, err
@@ -579,6 +591,8 @@ func reqFailed(err error) bool {
 }
 
 func getTimeout(t *testing.T) context.Context {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	t.Cleanup(cancel)
 

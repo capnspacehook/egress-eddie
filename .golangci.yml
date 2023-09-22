@@ -9,8 +9,13 @@ linters:
     - bidichk
     - durationcheck
     - errcheck
+    - errchkjson
     - errorlint
+    - execinquery
     - forcetypeassert
+    - gci
+    - gocheckcompilerdirectives
+    - goconst
     - gocritic
     - gofumpt
     - gosimple
@@ -18,20 +23,40 @@ linters:
     - ineffassign
     - loggercheck
     - misspell
+    - mirror
     - nilerr
     - nilnil
+    - paralleltest
     - prealloc
     - predeclared
     - reassign
     - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - tenv
+    - thelper
     - unconvert
     - unparam
     - unused
     - usestdlibvars
 
 linters-settings:
+  errcheck:
+    exclude-functions:
+      - (go.uber.org/zap/zapcore.ObjectEncoder).AddObject
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/capnspacehook/egress-eddie)
   misspell:
     locale: US
+  paralleltest:
+    ignore-missing: true
+  revive:
+    rules:
+      - name: blank-imports
+        disabled: true
 
 run:
-  timeout: 5m
+  timeout: 10m
