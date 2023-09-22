@@ -1,4 +1,4 @@
-name: Vulnerability scan
+name: Run CodeQL
 
 on:
   push:
@@ -13,7 +13,9 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  vuln-check:
+  codeql:
     permissions:
+      actions: write
       contents: read
-    uses: capnspacehook/go-workflows/.github/workflows/vuln.yml@master
+      security-events: write
+    uses: capnspacehook/go-workflows/.github/workflows/codeql.yml@master
