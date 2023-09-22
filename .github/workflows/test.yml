@@ -26,10 +26,6 @@ jobs:
       - name: Cache Go files
         uses: capnspacehook/cache-go@v1
 
-      - name: Ensure main package builds
-        run: |
-          go build
-
       # the test is compiled and run as root so that egress eddie can
       # open nfqueues, which is a privileged operation
       - run: |
