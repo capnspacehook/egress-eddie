@@ -233,3 +233,54 @@ name = "root allow all"
 dnsQueue.ipv4 = 3000
 allowAllHostnames = true
 ```
+
+## Verifying releases
+
+Starting from v1.1.1, binary checksum files are signed. You can verify
+released binaries to ensure they were not tampered with in transit.
+
+Verifying binaries requires [`cosign`](https://github.com/sigstore/cosign).
+
+### Verifying binaries
+
+Download the checksums file, certificate, signature and the archive to the same directory.
+
+Extract the binary from the archive, verify the checksums file and verify the contents of the binary:
+
+```sh
+tar xfs egress-eddie_<version>_linux_amd64.tar.gz
+cosign verify-blob --certificate checksums.txt.crt --signature checksums.txt.sig checksums.txt
+sha256sum -c checksums.txt
+```
+
+### Reproducing released binaries
+
+You can also reproduce the released binaries to verify that they were built from this unmodified
+source code. Verifying binaries requires [`gorepro`](https://github.com/capnspacehook/gorepro).
+
+First, download the release archive and extract it. Clone this repro and go into it.
+
+Install `gorepro` and run it on the extracted release binary. `gorepro` will tell you if reproducing
+the binary was successful. Don't worry about checking out the correct tag or commit, gorepro will
+handle that for you.
+
+If you don't trust `gorepro` you can run it again additionally passing the `-d` flag. This will
+print the commands `gorepro` generated to reproduce the release binary. You can run the printed commands
+and verify for yourself that the reproduced binary is bit for bit identical to the released one.
+
+```sh
+tar fxs egress-eddie_<version>_linux_amd64.tar.gz
+git clone https://github.com/capnspacehook/egress-eddie egress-eddie-src
+cd egress-eddie-src
+
+# reproduce binary
+go install github.com/capnspacehook/gorepro@latest
+gorepro -b="-ldflags=-s -w -X main.version <version>" ../egress-eddie
+
+# reproduce by manually running command from gorepro
+BUILD_CMD="$(gorepro -d -b='-ldflags=-s -w -X main.version <version>' ../egress-eddie)"
+echo "$BUILD_CMD"
+"$BUILD_CMD"
+sha256sum egress-eddie egress-eddie.repro
+```
+
