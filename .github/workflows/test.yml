@@ -62,6 +62,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install Go
         uses: WillAbides/setup-go-faster@v1.14.0
@@ -71,5 +73,25 @@ jobs:
       - name: Cache Go files
         uses: capnspacehook/cache-go@v1
 
-      - run: |
+      - name: Fuzz
+        run: |
+          cd testdata/fuzz
+          git switch master
+          git pull
+          cd ../../
+        
           go test -fuzz Fuzz -run Config -fuzztime 10m
+
+          # add new interesting inputs to corpus
+          cd testdata/fuzz
+          ./update-corpus.sh
+          git config user.name "Github Actions Bot"
+          git config user.email "<>"
+          git remote set-url origin https://capnspacehook:${{ secrets.FUZZ_GITHUB_TOKEN }}@github.com/capnspacehook/egress-eddie-corpus.git
+          git config --unset-all http.https://github.com/.extraheader
+
+          if ! git diff-files --quiet; then
+            git add -- *
+            git commit -m "Add new inputs to corpus"
+            git push
+          fi
