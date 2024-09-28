@@ -78,8 +78,9 @@ jobs:
           cd testdata/fuzz
           git switch master
           git pull
+          git status
           cd ../../
-        
+
           go test -fuzz Fuzz -run Config -fuzztime 10m
 
           # add new interesting inputs to corpus
