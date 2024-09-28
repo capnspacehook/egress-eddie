@@ -20,7 +20,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 Egress Eddie filters arbitrary outbound network traffic by hostname.
 
 	eddie-eddie [flags]
@@ -38,7 +38,7 @@ Egress Eddie accepts the following flags:
 
 `[1:])
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, `
+	fmt.Fprint(os.Stderr, `
 
 For more information, see https://github.com/capnspacehook/egress-eddie.
 `[1:])
