@@ -92,10 +92,13 @@ func (t *TimedCache[T]) AddEntry(entry T, ttl time.Duration) {
 			case <-timer.C:
 				running = false
 			case s := <-status:
-				if s == reset {
+				switch s {
+				case reset:
 					// wait until timer is finished resetting
 					<-status
-				} else if s == stop {
+				case start:
+					// the timer has started, wait for another status
+				case stop:
 					return
 				}
 			}
