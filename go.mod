@@ -10,7 +10,7 @@ require (
 	github.com/mdlayher/netlink v1.7.2
 	go.uber.org/zap v1.27.0
 	golang.org/x/exp v0.0.0-20230725093048-515e97ebf090
-	golang.org/x/sys v0.25.0
+	golang.org/x/sys v0.26.0
 	gvisor.dev/gvisor v0.0.0-20230811195211-463ea554e02f
 )
 
