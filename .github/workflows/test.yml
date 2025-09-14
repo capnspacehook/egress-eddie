@@ -49,12 +49,19 @@ jobs:
 
       # run the same tests as above but use a binary to process packets
       # to test with landlock and seccomp filters active
-      - run: |
-          cd cmd/egress-eddie
-          CGO_ENABLED=0 go build -o ../../egress-eddie
-          cd ../../
+      - name: Run binary tests
+        run: |
+          set +e
+
+          CGO_ENABLED=0 go build -o ./egress-eddie ./cmd/egress-eddie
           go test -c -o egress-eddie.test
-          sudo ./egress-eddie.test -binary-tests -enable-ipv6=false -test.timeout 5m -test.v
+          sudo ./egress-eddie.test -binary-tests -enable-ipv6=false -test.timeout 5m -test.v -test.failfast
+          # shellcheck disable=SC2181
+          if [[ $? -ne 0 ]]; then
+            echo "Syscall trace:"
+            cat trace.txt
+            exit 1
+          fi
 
   fuzz:
     runs-on: ubuntu-latest

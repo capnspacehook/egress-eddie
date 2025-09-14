@@ -19,12 +19,13 @@ import (
 	egresseddie "github.com/capnspacehook/egress-eddie"
 )
 
+//nolint:vet
 func usage() {
 	fmt.Fprint(os.Stderr, `
 Egress Eddie filters arbitrary outbound network traffic by hostname.
 
 	eddie-eddie [flags]
-	
+
 Egress Eddie filters DNS traffic and only allows requests and replies to
 specified hostnames. It then caches the IP addresses from allowed DNS replies
 and only allows traffic to go to them.
@@ -110,9 +111,9 @@ func main() {
 	// networking.
 	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
 	if !needsNetworking {
-		var allowedPaths []landlock.PathOpt
+		var allowedPaths []landlock.Rule
 		if *logPath != "stdout" && *logPath != "stderr" {
-			allowedPaths = []landlock.PathOpt{
+			allowedPaths = []landlock.Rule{
 				landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
 			}
 		}

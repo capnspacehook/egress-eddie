@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	_ "unsafe" // only needed for go:linkname directive
 
 	"github.com/BurntSushi/toml"
-	"golang.org/x/exp/slices"
 )
 
 const selfFilterName = "self-filter"
