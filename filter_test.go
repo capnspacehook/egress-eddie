@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"go.uber.org/goleak"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -69,9 +71,9 @@ allowedHostnames = [
 	)
 	client4, client6 := getHTTPClients()
 
-	is := is.New(t)
-
 	t.Run("allowed requests", func(t *testing.T) {
+		is := is.New(t)
+
 		err := makeHTTPReqs(client4, client6, "https://google.com")
 		is.NoErr(err) // request to allowed hostname should succeed
 
@@ -88,6 +90,8 @@ allowedHostnames = [
 	})
 
 	t.Run("blocked requests", func(t *testing.T) {
+		is := is.New(t)
+
 		err := makeHTTPReqs(client4, client6, "https://microsoft.com")
 		is.True(reqFailed(err)) // request to disallowed hostname should fail
 
@@ -103,6 +107,8 @@ allowedHostnames = [
 	})
 
 	t.Run("MX", func(t *testing.T) {
+		is := is.New(t)
+
 		mailDomains, err := net.DefaultResolver.LookupMX(getTimeout(t), "twitter.com")
 		is.NoErr(err) // MX request to allowed hostname should succeed
 
@@ -113,6 +119,8 @@ allowedHostnames = [
 	})
 
 	t.Run("NS", func(t *testing.T) {
+		is := is.New(t)
+
 		nameServers, err := net.DefaultResolver.LookupNS(getTimeout(t), "facebook.com")
 		is.NoErr(err) // NS request to allowed hostname should succeed
 
@@ -123,6 +131,8 @@ allowedHostnames = [
 	})
 
 	t.Run("SRV", func(t *testing.T) {
+		is := is.New(t)
+
 		_, servers, err := net.DefaultResolver.LookupSRV(getTimeout(t), "https", "tcp", "deb.debian.org")
 		is.NoErr(err) // SRV request to allowed hostname should succeed
 
@@ -133,6 +143,8 @@ allowedHostnames = [
 	})
 
 	t.Run("expired IP", func(t *testing.T) {
+		is := is.New(t)
+
 		addrs4, addrs6, err := lookupIPs(t, "google.com")
 		is.NoErr(err) // lookup of allowed hostname should succeed
 
@@ -261,6 +273,8 @@ allowedHostnames = [
 	config.enforcerCreator = newMockEnforcer
 
 	t.Run("filters waiting", func(t *testing.T) {
+		is := is.New(t)
+
 		initMockEnforcers()
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -296,13 +310,15 @@ allowedHostnames = [
 		f.Start()
 		t.Log("starting filters")
 
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			t := <-finishedAt
 			is.True(t.After(startedAt)) // packet handling should have finished after filters were started
 		}
 	})
 
 	t.Run("stopping without starting", func(t *testing.T) {
+		is := is.New(t)
+
 		// test that goroutines are cleanly shutdown
 		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 
@@ -333,6 +349,13 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
 	t.Helper()
 
+	if _, err := exec.LookPath(*eddieBinary); err != nil {
+		t.Fatalf("error finding egress eddie binary: %v", err)
+	}
+	if _, err := exec.LookPath("strace"); err != nil {
+		t.Fatalf("error finding strace: %v", err)
+	}
+
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	f, err := os.Create(configPath)
 	if err != nil {
@@ -355,9 +378,19 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 		iptablesCmd(t, true, command)
 	}
 
-	eddieCmd := exec.Command(*eddieBinary, "-c", configPath, "-d", "-f")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("error getting working directory: %v", err)
+	}
+	tracePath := filepath.Join(wd, "trace.txt")
+
+	// trace the binary so offending syscalls can be more easily found
+	eddieCmd := exec.Command("strace", "-f", "-o", tracePath, *eddieBinary, "-c", configPath, "-d", "-f")
 	eddieCmd.Stdout = os.Stdout
 	eddieCmd.Stderr = os.Stderr
+	eddieCmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 	if err := eddieCmd.Start(); err != nil {
 		t.Fatalf("error starting egress eddie binary: %v", err)
 	}
@@ -365,16 +398,29 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 	time.Sleep(time.Second)
 
 	t.Cleanup(func() {
-		err := eddieCmd.Process.Signal(os.Interrupt)
+		err := unix.Kill(-eddieCmd.Process.Pid, unix.SIGINT)
 		if err != nil {
 			t.Errorf("error killing egress eddie process: %v", err)
 		}
 
-		if err := eddieCmd.Wait(); err != nil {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				t.Errorf("egress eddie exited with error: %v", err)
+		done := make(chan struct{})
+		go func() {
+			err := eddieCmd.Wait()
+			done <- struct{}{}
+			if err != nil {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
+					t.Errorf("egress eddie exited with error: %v", err)
+				}
 			}
+		}()
+
+		timeout := time.After(3 * time.Second)
+		select {
+		case <-done:
+		case <-timeout:
+			t.Error("timeout waiting for egress eddie process to finish")
+			_ = eddieCmd.Process.Kill()
 		}
 
 		iptablesCmd(t, false, "-F")
