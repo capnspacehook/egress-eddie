@@ -23,14 +23,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Cache Go files
-        uses: capnspacehook/cache-go@v1
+      - name: Restore Go cache
+        uses: capnspacehook/cache-go/restore@v2.0.1
 
       # the test is compiled and run as root so that egress eddie can
       # open nfqueues, which is a privileged operation
       - run: |
           go test -c -race -o egress-eddie.test
           sudo ./egress-eddie.test -enable-ipv6=false -test.timeout 5m -test.v
+
+      - name: Save Go cache
+        if: always()
+        uses: capnspacehook/cache-go/save@v2.0.1
 
   binary-test:
     runs-on: ubuntu-latest
@@ -44,8 +48,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Cache Go files
-        uses: capnspacehook/cache-go@v1
+      - name: Restore Go cache
+        uses: capnspacehook/cache-go/restore@v2.0.1
 
       # run the same tests as above but use a binary to process packets
       # to test with landlock and seccomp filters active
@@ -63,6 +67,10 @@ jobs:
             exit 1
           fi
 
+      - name: Save Go cache
+        if: always()
+        uses: capnspacehook/cache-go/save@v2.0.1
+
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -75,8 +83,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Cache Go files
-        uses: capnspacehook/cache-go@v1
+      - name: Restore Go cache
+        uses: capnspacehook/cache-go/restore@v2.0.1
+        with:
+          cache-fuzz-corpus: true
 
       - run: |
           go test -fuzz Fuzz -run Config -fuzztime 10m
+
+      - name: Save Go cache
+        if: always()
+        uses: capnspacehook/cache-go/save@v2.0.1
+        with:
+          cache-fuzz-corpus: true

@@ -4,16 +4,26 @@ on:
   push:
     branches:
       - master
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "**.go"
+      - ".github/workflows/vuln.yml"
   pull_request:
     branches:
       - "*"
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - "**.go"
+      - ".github/workflows/vuln.yml"
   schedule:
-    - cron: "00 13 * * 1"
+    - cron: "0 0 * * *"
 
   workflow_dispatch: {}
 
 jobs:
-  vuln-check:
+  vuln:
     permissions:
       contents: read
     uses: capnspacehook/go-workflows/.github/workflows/vuln.yml@master
