@@ -27,5 +27,6 @@ jobs:
       pull-requests: write # so go-size-tracker can comment on PRs
     uses: capnspacehook/go-workflows/.github/workflows/size-report.yml@master
     with:
+      working-directory: cmd/egress-eddie/
       build-environment: |
         CGO_ENABLED=0
