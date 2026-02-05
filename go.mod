@@ -6,10 +6,10 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/florianl/go-nfqueue v1.3.2
 	github.com/google/gopacket v1.1.19
-	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3
+	github.com/landlock-lsm/go-landlock v0.6.0
 	github.com/mdlayher/netlink v1.8.0
 	go.uber.org/zap v1.27.1
-	golang.org/x/sys v0.39.0
+	golang.org/x/sys v0.40.0
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
 )
 
@@ -27,5 +27,5 @@ require (
 	golang.org/x/net v0.43.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
-	kernel.org/pub/linux/libs/security/libcap/psx v1.2.70 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )
