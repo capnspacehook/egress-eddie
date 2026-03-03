@@ -1,6 +1,6 @@
 module github.com/capnspacehook/egress-eddie
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
