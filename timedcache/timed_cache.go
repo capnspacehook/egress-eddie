@@ -11,7 +11,6 @@ import (
 // key-value pairs.
 type TimedCache[T comparable] struct {
 	mtx    sync.RWMutex
-	wg     sync.WaitGroup
 	logger *zap.Logger
 
 	cache map[T]*countedTimer
@@ -21,20 +20,10 @@ type TimedCache[T comparable] struct {
 // countedTimer stores the optional count and deadline for eviction
 // of an entry stored in a TimedCache.
 type countedTimer struct {
-	count  int
-	status chan timerStatus
-	timer  *time.Timer
+	count      int
+	generation uint64
+	timer      *time.Timer
 }
-
-// timerStatus is used to communicate with a child goroutine that is
-// waiting to delete a cache entry.
-type timerStatus uint8
-
-const (
-	reset timerStatus = iota // signals that the timer is getting reset
-	start                    // signals that the timer has started
-	stop                     // signals that the goroutine should finish
-)
 
 // New creates a new timed cache. If count is true, entries will take
 // n RemoveEntry calls to be manually removed from the cache where n
@@ -64,52 +53,38 @@ func (t *TimedCache[T]) AddEntry(entry T, ttl time.Duration) {
 			ct.count++
 		}
 
-		ct.status <- reset
-		if !ct.timer.Stop() {
-			<-ct.timer.C
-		}
-		ct.timer.Reset(ttl)
-		ct.status <- start
+		ct.timer.Stop()
+		ct.generation++
+		gen := ct.generation
+		ct.timer = time.AfterFunc(ttl, func() {
+			t.expireEntry(entry, gen)
+		})
 		return
 	}
 
-	timer := time.NewTimer(ttl)
-	status := make(chan timerStatus)
-
+	var gen uint64
 	t.cache[entry] = &countedTimer{
-		count:  0,
-		status: status,
-		timer:  timer,
+		generation: gen,
+		timer: time.AfterFunc(ttl, func() {
+			t.expireEntry(entry, gen)
+		}),
+	}
+}
+
+func (t *TimedCache[T]) expireEntry(entry T, gen uint64) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
+	ct, ok := t.cache[entry]
+	if !ok {
+		return
+	}
+	if ct.generation != gen {
+		return
 	}
 
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
-
-		running := true
-		for running {
-			select {
-			case <-timer.C:
-				running = false
-			case s := <-status:
-				switch s {
-				case reset:
-					// wait until timer is finished resetting
-					<-status
-				case start:
-					// the timer has started, wait for another status
-				case stop:
-					return
-				}
-			}
-		}
-
-		t.logger.Debug("deleting entry", zap.Any("entry", entry))
-
-		t.mtx.Lock()
-		delete(t.cache, entry)
-		t.mtx.Unlock()
-	}()
+	t.logger.Debug("deleting entry", zap.Any("entry", entry))
+	delete(t.cache, entry)
 }
 
 func (t *TimedCache[T]) EntryExists(entry T) bool {
@@ -136,15 +111,9 @@ func (t *TimedCache[T]) RemoveEntry(entry T) {
 		return
 	}
 
-	// we have already acquired a mutex lock here, so tell the child
-	// goroutine to stop so it won't attempt to also remove this entry
-	// as well
-	ct.status <- stop
-	if !ct.timer.Stop() {
-		<-ct.timer.C
-	}
-
 	t.logger.Debug("deleting entry", zap.Any("entry", entry))
+
+	ct.timer.Stop()
 	delete(t.cache, entry)
 }
 
@@ -155,11 +124,6 @@ func (t *TimedCache[T]) Stop() {
 	defer t.mtx.Unlock()
 
 	for _, ct := range t.cache {
-		ct.status <- stop
-		if !ct.timer.Stop() {
-			<-ct.timer.C
-		}
+		ct.timer.Stop()
 	}
-
-	t.wg.Wait()
 }
