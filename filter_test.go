@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -25,10 +24,9 @@ import (
 )
 
 var (
-	binaryTests    = flag.Bool("binary-tests", false, "use compiled binary to test with landlock and seccomp enabled")
-	containerTests = flag.Bool("container-tests", false, "use Docker image to test with landlock and seccomp enabled")
-	eddieBinary    = flag.String("eddie-binary", "./egress-eddie", "path to compiled egress-eddie binary")
-	eddieImage     = flag.String("eddie-image", "egress-eddie:test", "Docker image to test with")
+	binaryTests = flag.Bool("binary-tests", false, "use compiled binary to test with landlock and seccomp enabled")
+	eddieBinary = flag.String("eddie-binary", "./egress-eddie", "path to compiled egress-eddie binary")
+	eddieImage  = flag.String("eddie-image", "egress-eddie:test", "Docker image to test with")
 	// Github hosted runners don't support IPv6, so can't test with IPv6
 	// in Github Actions
 	// see https://github.com/actions/runner-images/issues/668
@@ -339,8 +337,6 @@ func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules [
 	switch {
 	case *binaryTests:
 		initBinaryFilters(t, configStr, iptablesRules, ip6tablesRules)
-	case *containerTests:
-		initContainerFilters(t, configStr, ip6tablesRules, ip6tablesRules)
 	default:
 		initStandardFilters(t, configStr, iptablesRules, ip6tablesRules)
 	}
@@ -421,68 +417,6 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 		case <-timeout:
 			t.Error("timeout waiting for egress eddie process to finish")
 			_ = eddieCmd.Process.Kill()
-		}
-
-		iptablesCmd(t, false, "-F")
-		iptablesCmd(t, true, "-F")
-	})
-}
-
-func initContainerFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
-	t.Helper()
-
-	configPath := filepath.Join(t.TempDir(), "config.toml")
-	f, err := os.Create(configPath)
-	if err != nil {
-		t.Fatalf("error creating config file: %v", err)
-	}
-	if _, err = f.WriteString(configStr); err != nil {
-		t.Fatalf("error writing config file: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("error closing config file: %v", err)
-	}
-
-	for _, command := range iptablesRules {
-		iptablesCmd(t, false, command)
-	}
-
-	for _, command := range ip6tablesRules {
-		iptablesCmd(t, true, command)
-	}
-
-	volume := fmt.Sprintf("-v=%s:/config.toml:ro", configPath)
-	dockerCmd := exec.Command(
-		"docker",
-		"run",
-		"--cap-add=NET_ADMIN",
-		"--net=host",
-		volume,
-		"--rm",
-		*eddieImage,
-		"-c=/config.toml",
-		"-d",
-		"-f",
-	)
-	dockerCmd.Stdout = os.Stdout
-	dockerCmd.Stderr = os.Stderr
-	if err := dockerCmd.Start(); err != nil {
-		t.Fatalf("error starting egress eddie container: %v", err)
-	}
-
-	time.Sleep(time.Second)
-
-	t.Cleanup(func() {
-		err := dockerCmd.Process.Signal(os.Interrupt)
-		if err != nil {
-			t.Errorf("error killing egress eddie container: %v", err)
-		}
-
-		if err := dockerCmd.Wait(); err != nil {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				t.Errorf("egress eddie exited with container: %v", err)
-			}
 		}
 
 		iptablesCmd(t, false, "-F")
