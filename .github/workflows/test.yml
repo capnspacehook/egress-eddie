@@ -25,8 +25,7 @@ jobs:
           cache: false
 
       - name: Install uv for hegel
-        run: |
-          sudo apt-get install uv
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Restore Go cache
         uses: capnspacehook/cache-go/restore@v2.0.1
