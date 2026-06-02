@@ -28,6 +28,9 @@ func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, _ bool, 
 	if _, ok := mockEnforcers[queueNum]; ok {
 		return nil, fmt.Errorf("a nfqueue with the queue number %d has already been started", queueNum)
 	}
+	if hook == nil {
+		return nil, fmt.Errorf("a nil hook was passed")
+	}
 
 	mEnforcer := &mockEnforcer{
 		hook:     hook,
