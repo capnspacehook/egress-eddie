@@ -79,6 +79,9 @@ func (t *TimedCache[T]) expireEntry(entry T, gen uint64) {
 	if !ok {
 		return
 	}
+	// if the generation of the entry doesn't match the current one,
+	// it means the timer has been restarted and the entry shouldn't
+	// be deleted yet
 	if ct.generation != gen {
 		return
 	}

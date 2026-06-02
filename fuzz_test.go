@@ -2,8 +2,6 @@ package egresseddie
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -36,8 +34,6 @@ var (
 	trafficPayload     = gopacket.Payload([]byte("https://bit.ly/3aeUqbo"))
 )
 
-var writeToDisk = false
-
 func FuzzFiltering(f *testing.F) {
 	for _, tt := range configTests {
 		// only add valid configs to the corpus
@@ -60,6 +56,7 @@ func FuzzFiltering(f *testing.F) {
 		if err != nil {
 			t.SkipNow()
 		}
+		debugLog(logger, "config:\n%s", string(cb))
 
 		initMockEnforcers()
 		config.enforcerCreator = newMockEnforcer
@@ -75,7 +72,10 @@ func FuzzFiltering(f *testing.F) {
 			failAndDumpConfig(t, cb, "error starting filters: %v", err)
 		}
 		f.Start()
-		t.Cleanup(f.Stop)
+		t.Cleanup(func() {
+			cancel()
+			f.Stop()
+		})
 
 		allowIPv4Port := uint16(1000)
 		allowIPv6Port := uint16(1010)
@@ -98,8 +98,6 @@ func FuzzFiltering(f *testing.F) {
 			disallowedName := "no" + allowedName + "no"
 
 			if filter.DNSQueue.eitherSet() {
-				writeToDisk = true
-
 				checkBlockingDNSRequests(t, logger, cb, filter, false, disallowedIPv4Port, allowedName, disallowedName)
 				checkBlockingDNSRequests(t, logger, cb, filter, true, disallowedIPv6Port, allowedName, disallowedName)
 				checkAllowingDNS(t, logger, cb, config, filter, allowIPv4Port, allowIPv6Port, allowedName, disallowedName)
@@ -109,10 +107,6 @@ func FuzzFiltering(f *testing.F) {
 			}
 
 			checkBlockingUnknownDNSReplies(t, logger, cb, config, allowedName)
-
-			if writeToDisk {
-				t.Fatal()
-			}
 		}
 
 		for _, filter := range config.Filters {
@@ -675,11 +669,6 @@ func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, op
 		err = parser.DecodeLayers(buf.Bytes(), &decoded)
 		if err == nil {
 			verdictExpected = true
-		}
-
-		if writeToDisk {
-			hash := sha1.Sum(buf.Bytes())
-			os.WriteFile(hex.EncodeToString(hash[:]), buf.Bytes(), 0o644)
 		}
 	}
 
