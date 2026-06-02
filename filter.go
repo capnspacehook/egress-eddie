@@ -73,6 +73,7 @@ type filter struct {
 
 	res resolver
 
+	// TODO: check ID and questions between requests and responses
 	connections       *timedcache.TimedCache[connectionID]
 	allowedIPs        *timedcache.TimedCache[netip.Addr]
 	additionalDomains *timedcache.TimedCache[string]
@@ -503,12 +504,16 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
 			if err != nil {
 				logger.Error("error parsing DNS packet", zap.Error(err))
+				if dns != nil {
+					logger.Info("offending DNS packet", dnsFields(dns, f.fullDNSLogging)...)
+				}
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
 			// drop DNS replies, they shouldn't be going to this filter
-			if dns.QR || dns.ANCount > 0 {
+			if dns.QR || dns.ANCount > 0 || dns.NSCount > 0 || dns.ARCount > 0 ||
+				len(dns.Answers) > 0 || len(dns.Authorities) > 0 || len(dns.Additionals) > 0 {
 				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
 				return dropVerdict
 			}
@@ -554,20 +559,20 @@ func setVerdict(logger *zap.Logger, e enforcer, attr nfqueue.Attribute, v verdic
 
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionID, error) {
 	var (
-		ip4     layers.IPv4
-		ip6     layers.IPv6
-		udp     layers.UDP
-		tcp     layers.TCP
-		dns     layers.DNS
-		parser  *gopacket.DecodingLayerParser
-		decoded = make([]gopacket.LayerType, 0, 3)
+		ip4       layers.IPv4
+		ip6       layers.IPv6
+		udp       layers.UDP
+		tcp       layers.TCP
+		parsedDNS layers.DNS
+		parser    *gopacket.DecodingLayerParser
+		decoded   = make([]gopacket.LayerType, 0, 3)
 	)
 
 	// parse DNS packet
 	if !ipv6 {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp, &tcp, &dns)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp, &tcp, &parsedDNS)
 	} else {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp, &tcp, &dns)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp, &tcp, &parsedDNS)
 	}
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
@@ -575,6 +580,23 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 	}
 	if len(decoded) != 3 {
 		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 3", len(decoded))
+	}
+
+	// ensure that the fields match the amount of records
+	if parsedDNS.QDCount == 0 || int(parsedDNS.QDCount) != len(parsedDNS.Questions) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid question count; qd_count=%d questions=%d", parsedDNS.QDCount, len(parsedDNS.Questions))
+	}
+	if int(parsedDNS.ANCount) != len(parsedDNS.Answers) || (parsedDNS.QR && (int(parsedDNS.ANCount) == 0 || len(parsedDNS.Answers) == 0)) ||
+		(!parsedDNS.QR && (int(parsedDNS.ANCount) != 0 || len(parsedDNS.Answers) != 0)) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid answer count; qr=%t an_count=%d answers=%d", parsedDNS.QR, parsedDNS.ANCount, len(parsedDNS.Answers))
+	}
+	if int(parsedDNS.NSCount) != len(parsedDNS.Authorities) || (parsedDNS.QR && (int(parsedDNS.NSCount) == 0 || len(parsedDNS.Authorities) == 0)) ||
+		(!parsedDNS.QR && (int(parsedDNS.NSCount) != 0 || len(parsedDNS.Authorities) != 0)) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid authority count; qr=%t ns_count=%d authorities=%d", parsedDNS.QR, parsedDNS.NSCount, len(parsedDNS.Authorities))
+	}
+	if int(parsedDNS.ARCount) != len(parsedDNS.Additionals) || (parsedDNS.QR && (int(parsedDNS.ARCount) == 0 || len(parsedDNS.Additionals) == 0)) ||
+		(!parsedDNS.QR && (int(parsedDNS.ARCount) != 0 || len(parsedDNS.Additionals) != 0)) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid additional count; qr=%t ar_count=%d additionals=%d", parsedDNS.QR, parsedDNS.ARCount, len(parsedDNS.Additionals))
 	}
 
 	// build connection ID so dns requests/responses can be correlated
@@ -620,7 +642,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		connID.dst = netip.AddrPortFrom(dst, dstPort)
 	}
 
-	return &dns, connID, nil
+	return &parsedDNS, connID, nil
 }
 
 func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
@@ -705,6 +727,9 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 			if err != nil {
 				logger.Error("error parsing DNS packet", zap.Error(err))
+				if dns != nil {
+					logger.Info("offending DNS packet", dnsFields(dns, f.fullDNSLogging)...)
+				}
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))

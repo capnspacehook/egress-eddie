@@ -17,7 +17,11 @@ func dnsFields(dns *layers.DNS, fullDNSLogging bool) []zap.Field {
 	)
 
 	if fullDNSLogging {
-		fields = append(fields, zap.Uint8("opcode", uint8(dns.OpCode)))
+		fields = append(fields,
+			zap.Uint16("id", dns.ID),
+			zap.Bool("qr", dns.QR),
+			zap.Uint8("opcode", uint8(dns.OpCode)),
+		)
 		if dns.AA {
 			flags = append(flags, "aa")
 		}
@@ -35,9 +39,22 @@ func dnsFields(dns *layers.DNS, fullDNSLogging bool) []zap.Field {
 		if dns.QR {
 			fields = append(fields, zap.Uint8("resp-code", uint8(dns.ResponseCode)))
 		}
+
+		if dns.QDCount > 0 {
+			fields = append(fields, zap.Uint16("qd_count", dns.QDCount))
+		}
+		if dns.ANCount > 0 {
+			fields = append(fields, zap.Uint16("an_count", dns.ANCount))
+		}
+		if dns.NSCount > 0 {
+			fields = append(fields, zap.Uint16("ns_count", dns.NSCount))
+		}
+		if dns.ARCount > 0 {
+			fields = append(fields, zap.Uint16("ar_count", dns.ARCount))
+		}
 	}
 
-	if dns.QDCount > 0 {
+	if len(dns.Questions) > 0 {
 		fields = append(fields, zap.Array("questions", dnsQuestions(dns.Questions)))
 	}
 
