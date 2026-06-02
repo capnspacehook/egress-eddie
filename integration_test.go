@@ -42,7 +42,7 @@ dnsQueue.ipv6 = 1010
 trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "3s"
-allowedHostnames = [
+allowedDomains = [
 	"debian.org",
 	"facebook.com",
 	"google.com",
@@ -70,34 +70,34 @@ allowedHostnames = [
 		is := is.New(t)
 
 		err := makeHTTPReqs(client4, client6, "https://google.com")
-		is.NoErr(err) // request to allowed hostname should succeed
+		is.NoErr(err) // request to allowed domain should succeed
 
 		err = makeHTTPReqs(client4, client6, "https://news.google.com")
-		is.NoErr(err) // request to allowed subdomain of hostname should succeed
+		is.NoErr(err) // request to allowed subdomain of domain should succeed
 
 		// TODO: github.com does not have AAAA record, so this will fail over
 		// IPv6. Find other website that will work here
 		err = makeHTTPReqs(client4, nil, "https://gist.github.com")
-		is.NoErr(err) // request to allowed hostname should succeed
+		is.NoErr(err) // request to allowed domain should succeed
 
 		err = makeHTTPReqs(client4, nil, "https://github.com")
-		is.NoErr(err) // request to allowed hostname from response CNAME should succeed
+		is.NoErr(err) // request to allowed domain from response CNAME should succeed
 	})
 
 	t.Run("blocked requests", func(t *testing.T) {
 		is := is.New(t)
 
 		err := makeHTTPReqs(client4, client6, "https://microsoft.com")
-		is.True(reqFailed(err)) // request to disallowed hostname should fail
+		is.True(reqFailed(err)) // request to disallowed domain should fail
 
 		err = makeHTTPReqs(client4, client6, "https://ggoogle.com")
 		is.True(reqFailed(err)) // test subdomain matching works correctly
 
 		_, err = client4.Get("https://1.1.1.1")
-		is.True(reqFailed(err)) // request to IPv4 IP of disallowed hostname should fail
+		is.True(reqFailed(err)) // request to IPv4 IP of disallowed domain should fail
 		if *enableIPv6 {
 			_, err = client6.Get("https://[2606:4700:4700::1111]")
-			is.True(reqFailed(err)) // request to IPv6 IP of disallowed hostname should fail
+			is.True(reqFailed(err)) // request to IPv6 IP of disallowed domain should fail
 		}
 	})
 
@@ -105,11 +105,11 @@ allowedHostnames = [
 		is := is.New(t)
 
 		mailDomains, err := net.DefaultResolver.LookupMX(getTimeout(t), "twitter.com")
-		is.NoErr(err) // MX request to allowed hostname should succeed
+		is.NoErr(err) // MX request to allowed domain should succeed
 
 		for _, mailDomain := range mailDomains {
 			_, _, err = lookupIPs(t, mailDomain.Host)
-			is.NoErr(err) // lookup of allowed mail hostname should succeed
+			is.NoErr(err) // lookup of allowed mail domain should succeed
 		}
 	})
 
@@ -117,7 +117,7 @@ allowedHostnames = [
 		is := is.New(t)
 
 		nameServers, err := net.DefaultResolver.LookupNS(getTimeout(t), "facebook.com")
-		is.NoErr(err) // NS request to allowed hostname should succeed
+		is.NoErr(err) // NS request to allowed domain should succeed
 
 		for _, nameServer := range nameServers {
 			_, _, err = lookupIPs(t, nameServer.Host)
@@ -129,7 +129,7 @@ allowedHostnames = [
 		is := is.New(t)
 
 		_, servers, err := net.DefaultResolver.LookupSRV(getTimeout(t), "https", "tcp", "deb.debian.org")
-		is.NoErr(err) // SRV request to allowed hostname should succeed
+		is.NoErr(err) // SRV request to allowed domain should succeed
 
 		for _, server := range servers {
 			_, _, err = lookupIPs(t, server.Target)
@@ -141,7 +141,7 @@ allowedHostnames = [
 		is := is.New(t)
 
 		addrs4, addrs6, err := lookupIPs(t, "google.com")
-		is.NoErr(err) // lookup of allowed hostname should succeed
+		is.NoErr(err) // lookup of allowed domain should succeed
 
 		time.Sleep(4 * time.Second) // wait until IPs should expire
 
@@ -163,7 +163,7 @@ inboundDNSQueue.ipv6 = 10
 name = "test"
 dnsQueue.ipv4 = 1000
 dnsQueue.ipv6 = 1010
-allowAllHostnames = true`
+allowAllDomains = true`
 
 	initFilters(
 		t,
@@ -182,7 +182,7 @@ allowAllHostnames = true`
 	is := is.New(t)
 
 	err := makeHTTPReqs(client4, client6, "https://harmony.shinesparkers.net")
-	is.NoErr(err) // request to hostname should succeed
+	is.NoErr(err) // request to domain should succeed
 }
 
 func TestCaching(t *testing.T) {
@@ -197,7 +197,7 @@ name = "test"
 trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 reCacheEvery = "1m"
-cachedHostnames = [
+cachedDomains = [
 	"digitalocean.com",
 ]`
 
@@ -222,7 +222,7 @@ cachedHostnames = [
 	)
 	client4, _ := getHTTPClients()
 
-	// wait until hostnames responses are cached by filters
+	// wait until domains responses are cached by filters
 	time.Sleep(3 * time.Second)
 
 	for _, addr := range addrs {
@@ -230,7 +230,7 @@ cachedHostnames = [
 		addr = addr.Unmap()
 
 		resp, err := client4.Get("http://" + addr.String())
-		is.NoErr(err) // request to IP of cached hostname should succeed
+		is.NoErr(err) // request to IP of cached domain should succeed
 		resp.Body.Close()
 	}
 

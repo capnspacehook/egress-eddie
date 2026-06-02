@@ -85,16 +85,16 @@ func FuzzFiltering(f *testing.F) {
 		for _, filter := range config.Filters {
 			debugLog(logger, "testing DNS on filter %q", filter.Name)
 
-			// TODO: handle cached hostnames and reverse lookups
-			if len(filter.AllowedHostnames) == 0 && !filter.AllowAllHostnames {
+			// TODO: handle cached domains and reverse lookups
+			if len(filter.AllowedDomains) == 0 && !filter.AllowAllDomains {
 				continue
 			}
 
 			allowedName := "google.com"
-			if len(filter.AllowedHostnames) > 0 {
-				allowedName = filter.AllowedHostnames[0]
+			if len(filter.AllowedDomains) > 0 {
+				allowedName = filter.AllowedDomains[0]
 			}
-			// TODO: ensure this won't collide with another allowed hostname
+			// TODO: ensure this won't collide with another allowed domain
 			disallowedName := "no" + allowedName + "no"
 
 			if filter.DNSQueue.eitherSet() {
@@ -182,7 +182,7 @@ func checkBlockingDNSRequests(t *testing.T, logger *zap.Logger, cb []byte, filte
 		connState:       stateNew,
 		expectedVerdict: nfqueue.NfDrop,
 	})
-	if !filter.AllowAllHostnames {
+	if !filter.AllowAllDomains {
 		debugLog(logger, "send DNS request of disallowed domain name")
 		sendPacket(t, logger, cb, mockEnforcers[reqn], sendOpts{
 			ipv6:    ipv6,
@@ -344,7 +344,7 @@ func checkAllowingDNS(t *testing.T, logger *zap.Logger, cb []byte, config *Confi
 	// The self filter only processes DNS responses so it won't
 	// have an allowed answers duration set.
 	attemptReplies := filter.DNSQueue == config.SelfDNSQueue || (filter.DNSQueue != config.SelfDNSQueue && filter.AllowAnswersFor >= time.Millisecond)
-	allowVerdict := filter.AllowAllHostnames || filter.DNSQueue.eitherSet()
+	allowVerdict := filter.AllowAllDomains || filter.DNSQueue.eitherSet()
 
 	check := func(ipv6 bool, reqn, rplyn uint16) {
 		port := ip4Port
@@ -768,7 +768,7 @@ dnsQueue.ipv6 = 1010
 trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "1s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",

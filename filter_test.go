@@ -16,7 +16,7 @@ import (
 	"github.com/capnspacehook/egress-eddie/timedcache"
 )
 
-func TestHostnameAllowed(t *testing.T) {
+func TestDomainAllowed(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
 		allowedDomain := hegel.Draw(ht, hegel.Domains())
 		label := string(hegel.Draw(ht, hegel.Binary(1, 63)))
@@ -26,70 +26,70 @@ func TestHostnameAllowed(t *testing.T) {
 
 		f := &filter{
 			opts: &FilterOptions{
-				AllowedHostnames: []string{allowedDomain},
+				AllowedDomains: []string{allowedDomain},
 			},
 			logger: zap.NewNop(),
 
-			additionalHostnames: timedcache.New[string](zap.NewNop(), false),
+			additionalDomains: timedcache.New[string](zap.NewNop(), false),
 		}
 
-		if !checkHostnameAllowed(ht, f, strings.ToLower(allowedDomain)) {
+		if !checkDomainAllowed(ht, f, strings.ToLower(allowedDomain)) {
 			ht.Fatal("lowercased allowed domain should be allowed")
 		}
-		if !checkHostnameAllowed(ht, f, strings.ToUpper(allowedDomain)) {
+		if !checkDomainAllowed(ht, f, strings.ToUpper(allowedDomain)) {
 			ht.Fatal("uppercased allowed domain should be allowed")
 		}
 
-		if !checkHostnameAllowed(ht, f, allowedDomain) {
+		if !checkDomainAllowed(ht, f, allowedDomain) {
 			ht.Fatal("allowed domain should be allowed")
 		}
-		if !checkHostnameAllowed(ht, f, "."+allowedDomain) {
+		if !checkDomainAllowed(ht, f, "."+allowedDomain) {
 			ht.Fatal("allowed domain with leading dot should be allowed")
 		}
 		if isValidDomain {
 			newDomain := label + "." + allowedDomain
-			if !checkHostnameAllowed(ht, f, newDomain) {
+			if !checkDomainAllowed(ht, f, newDomain) {
 				ht.Fatal("subdomain of allowed domain should be allowed")
 			}
-			if !checkHostnameAllowed(ht, f, strings.ToLower(newDomain)) {
+			if !checkDomainAllowed(ht, f, strings.ToLower(newDomain)) {
 				ht.Fatal("lowercased subdomain of allowed domain should be allowed")
 			}
-			if !checkHostnameAllowed(ht, f, strings.ToUpper(newDomain)) {
+			if !checkDomainAllowed(ht, f, strings.ToUpper(newDomain)) {
 				ht.Fatal("uppercased subdomain of allowed domain should be allowed")
 			}
 		}
 
 		if strings.EqualFold(label, allowedDomain) {
-			if checkHostnameAllowed(ht, f, label) {
+			if checkDomainAllowed(ht, f, label) {
 				ht.Fatal("random domain should not be allowed")
 			}
 		}
 		if !trailingDot {
-			if checkHostnameAllowed(ht, f, label+allowedDomain) {
+			if checkDomainAllowed(ht, f, label+allowedDomain) {
 				ht.Fatal("random string prepended to allowed domain should not be allowed")
 			}
 		}
-		if checkHostnameAllowed(ht, f, allowedDomain+label) {
+		if checkDomainAllowed(ht, f, allowedDomain+label) {
 			ht.Fatal("random string concatenated to allowed domain should not be allowed")
 		}
-		if checkHostnameAllowed(ht, f, allowedDomain+"."+label) {
+		if checkDomainAllowed(ht, f, allowedDomain+"."+label) {
 			ht.Fatal("random label concatenated to allowed domain should not be allowed")
 		}
-		if checkHostnameAllowed(ht, f, label+allowedDomain+label) {
+		if checkDomainAllowed(ht, f, label+allowedDomain+label) {
 			ht.Fatal("random string surrounding allowed domain should not be allowed")
 		}
-		if checkHostnameAllowed(ht, f, label+"."+allowedDomain+"."+label) {
+		if checkDomainAllowed(ht, f, label+"."+allowedDomain+"."+label) {
 			ht.Fatal("random label surrounding allowed domain should not be allowed")
 		}
 	})
 }
 
-func checkHostnameAllowed(ht *hegel.T, f *filter, hostname string) bool {
+func checkDomainAllowed(ht *hegel.T, f *filter, domain string) bool {
 	ht.Helper()
 
-	ht.Note(hostname)
+	ht.Note(domain)
 
-	return f.hostnameAllowed(hostname)
+	return f.domainAllowed(domain)
 }
 
 func TestFiltersStart(t *testing.T) {
@@ -106,11 +106,11 @@ name = "test"
 dnsQueue.ipv6 = 1010
 trafficQueue.ipv6 = 1011
 reCacheEvery = "1m"
-cachedHostnames = [
+cachedDomains = [
 	"example.com",
 ]
 allowAnswersFor = "1s"
-allowedHostnames = [
+allowedDomains = [
 	"test.org"
 ]`)
 

@@ -73,9 +73,9 @@ type filter struct {
 
 	res resolver
 
-	connections         *timedcache.TimedCache[connectionID]
-	allowedIPs          *timedcache.TimedCache[netip.Addr]
-	additionalHostnames *timedcache.TimedCache[string]
+	connections       *timedcache.TimedCache[connectionID]
+	allowedIPs        *timedcache.TimedCache[netip.Addr]
+	additionalDomains *timedcache.TimedCache[string]
 
 	isSelfFilter bool
 }
@@ -138,7 +138,7 @@ type enforcer interface {
 	Close() error
 }
 
-// resolver resolves hostnames to IP addresses and vice versa.
+// resolver resolves domains to IP addresses and vice versa.
 type resolver interface {
 	LookupNetIP(ctx context.Context, network string, host string) ([]netip.Addr, error)
 	LookupAddr(ctx context.Context, addr string) ([]string, error)
@@ -260,7 +260,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 
 	if opts.TrafficQueue.eitherSet() {
 		f.allowedIPs = timedcache.New[netip.Addr](f.logger, false)
-		f.additionalHostnames = timedcache.New[string](filterLogger, false)
+		f.additionalDomains = timedcache.New[string](filterLogger, false)
 
 		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, newGenericCallback(ctx, &f))
 		if err != nil {
@@ -269,9 +269,9 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		f.genericNF4 = nf4
 		f.genericNF6 = nf6
 
-		if len(f.opts.CachedHostnames) > 0 {
+		if len(f.opts.CachedDomains) > 0 {
 			f.wg.Go(func() {
-				f.cacheHostnames(ctx, filterLogger)
+				f.cacheDomains(ctx, filterLogger)
 			})
 		}
 	}
@@ -364,14 +364,14 @@ func (f *filter) start() {
 	if f.opts.TrafficQueue.eitherSet() {
 		f.genericSignaler.ready()
 	}
-	if len(f.opts.CachedHostnames) > 0 {
+	if len(f.opts.CachedDomains) > 0 {
 		f.cachingSignaler.ready()
 	}
 
 	f.started = true
 }
 
-func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
+func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger) {
 	// wait until the filter manager is setup to prevent race conditions
 	select {
 	case <-f.cachingSignaler.isReady():
@@ -385,22 +385,22 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 
 	var (
 		// add to the user supplied duration to ensure there isn't a
-		// window where hostnames are not allowed
+		// window where domains are not allowed
 		ttl   = f.opts.ReCacheEvery + dnsQueryTimeout
 		timer = time.NewTimer(f.opts.ReCacheEvery)
 	)
 
 	for {
-		for i := range f.opts.CachedHostnames {
-			logger.Info("caching lookup of hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
-			addrs, err := f.res.LookupNetIP(ctx, "ip", f.opts.CachedHostnames[i])
+		for i := range f.opts.CachedDomains {
+			logger.Info("caching lookup of domain", zap.String("domain", f.opts.CachedDomains[i]))
+			addrs, err := f.res.LookupNetIP(ctx, "ip", f.opts.CachedDomains[i])
 			if err != nil {
 				var dnsErr *net.DNSError
 				if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
+					logger.Warn("could not resolve domain", zap.String("domain", f.opts.CachedDomains[i]))
 					continue
 				}
-				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.Error(err))
+				logger.Error("error resolving domain", zap.String("domain", f.opts.CachedDomains[i]), zap.Error(err))
 				continue
 			}
 
@@ -442,7 +442,7 @@ func (f *filter) close() {
 		if f.opts.TrafficQueue.eitherSet() {
 			f.genericSignaler.abort()
 		}
-		if len(f.opts.CachedHostnames) > 0 {
+		if len(f.opts.CachedDomains) > 0 {
 			f.cachingSignaler.abort()
 		}
 	}
@@ -466,8 +466,8 @@ func (f *filter) close() {
 	if f.allowedIPs != nil {
 		f.allowedIPs.Stop()
 	}
-	if f.additionalHostnames != nil {
-		f.additionalHostnames.Stop()
+	if f.additionalDomains != nil {
+		f.additionalDomains.Stop()
 	}
 }
 
@@ -516,8 +516,8 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			}
 
 			// validate DNS request questions are for allowed
-			// hostnames, drop them otherwise
-			if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(dns) {
+			// domains, drop them otherwise
+			if !f.opts.AllowAllDomains && !f.validateDNSQuestions(dns) {
 				logger.Warn("dropping DNS request", dnsFields(dns, f.fullDNSLogging)...)
 				return dropVerdict
 			}
@@ -635,9 +635,9 @@ func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
 
 	for i := range dns.Questions {
 		// bail out if any of the questions don't contain an allowed
-		// hostname
+		// domain
 		qName := string(dns.Questions[i].Name)
-		if !f.hostnameAllowed(qName) {
+		if !f.domainAllowed(qName) {
 			return false
 		}
 	}
@@ -645,20 +645,20 @@ func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
 	return true
 }
 
-func (f *filter) hostnameAllowed(hostname string) bool {
-	for j := range f.opts.AllowedHostnames {
-		if hostname == f.opts.AllowedHostnames[j] || dns.IsSubDomain(f.opts.AllowedHostnames[j], hostname) {
+func (f *filter) domainAllowed(domain string) bool {
+	for j := range f.opts.AllowedDomains {
+		if domain == f.opts.AllowedDomains[j] || dns.IsSubDomain(f.opts.AllowedDomains[j], domain) {
 			return true
 		}
 	}
 
 	// the self-filter doesn't have a nfqueue for generic traffic, and
-	// therefore won't have a cache for additional hostnames
+	// therefore won't have a cache for additional domains
 	if f.isSelfFilter {
 		return false
 	}
 
-	return f.additionalHostnames.EntryExists(hostname)
+	return f.additionalDomains.EntryExists(domain)
 }
 
 func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback) nfqueue.HookFunc {
@@ -726,13 +726,13 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			connFilter.connections.RemoveEntry(connID)
 
 			logger = logger.With(zap.String("dns-req.filter.name", connFilter.opts.Name))
-			// allow and don't process the DNS response if all hostnames
+			// allow and don't process the DNS response if all domains
 			// are allowed
-			if !connFilter.opts.AllowAllHostnames {
+			if !connFilter.opts.AllowAllDomains {
 				// validate DNS response questions are for allowed
-				// hostnames, drop them otherwise; responses for disallowed
-				// hostnames should never happen in theory, because we
-				// block requests for disallowed hostnames but it doesn't
+				// domains, drop them otherwise; responses for disallowed
+				// domains should never happen in theory, because we
+				// block requests for disallowed domains but it doesn't
 				// hurt to check
 				if !connFilter.validateDNSQuestions(dns) {
 					logger.Info("dropping DNS reply", dnsFields(dns, f.fullDNSLogging)...)
@@ -745,7 +745,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 					ttl := connFilter.opts.AllowAnswersFor
 					for _, answer := range dns.Answers {
 						aName := string(answer.Name)
-						if !connFilter.hostnameAllowed(aName) {
+						if !connFilter.domainAllowed(aName) {
 							logger.Info("dropping DNS reply", zap.ByteString("answer", answer.Name))
 							return dropVerdict
 						}
@@ -768,7 +768,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 							}
 						case layers.DNSTypeCNAME, layers.DNSTypeSRV, layers.DNSTypeMX, layers.DNSTypeNS:
 							// temporarily add CNAME, SRV, MX, and NS answers to allowed
-							// hostnames list
+							// domains list
 							var name []byte
 							switch answer.Type {
 							case layers.DNSTypeCNAME:
@@ -781,7 +781,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 								name = answer.NS
 							}
 
-							connFilter.additionalHostnames.AddEntry(string(name), ttl)
+							connFilter.additionalDomains.AddEntry(string(name), ttl)
 						default:
 							// don't need to specifically handle other answer
 							// types, the packet will be allowed so whoever
@@ -957,12 +957,12 @@ func (f *filter) lookupAndValidateIP(ctx context.Context, logger *zap.Logger, ip
 	ttl := f.opts.AllowAnswersFor
 	for i := range names {
 		// remove trailing dot if necessary before searching through
-		// allowed hostnames
+		// allowed domains
 		if names[i][len(names[i])-1] == '.' {
 			names[i] = names[i][:len(names[i])-1]
 		}
 
-		if f.hostnameAllowed(names[i]) {
+		if f.domainAllowed(names[i]) {
 			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip))
 			f.allowedIPs.AddEntry(ip, ttl)
 			return true, nil

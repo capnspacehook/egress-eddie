@@ -259,7 +259,7 @@ trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"selfDNSQueue.ipv4" and "selfDNSQueue.ipv6" cannot be the same`,
 	},
@@ -275,7 +275,7 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"selfDNSQueue.ipv4" must be set when "inboundDNSQueue.ipv4" is set`,
 	},
@@ -292,7 +292,7 @@ dnsQueue.ipv6 = 1000
 trafficQueue.ipv6 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"selfDNSQueue.ipv4" must not be set when "inboundDNSQueue.ipv4" is not set`,
 	},
@@ -308,7 +308,7 @@ dnsQueue.ipv6 = 1000
 trafficQueue.ipv6 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"selfDNSQueue.ipv6" must be set when "inboundDNSQueue.ipv6" is set`,
 	},
@@ -325,7 +325,7 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"selfDNSQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`,
 	},
@@ -341,12 +341,12 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `"inboundDNSQueue" and "selfDNSQueue" must be different`,
 	},
 	{
-		testName: "trafficQueue and AllowAllHostnames set",
+		testName: "trafficQueue and AllowAllDomains set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -354,12 +354,12 @@ inboundDNSQueue.ipv4 = 1
 name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
-allowAllHostnames = true`,
+allowAllDomains = true`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "trafficQueue" must not be set when "allowAllHostnames" is true`,
+		expectedErr:    `filter "foo": "trafficQueue" must not be set when "allowAllDomains" is true`,
 	},
 	{
-		testName: "allowedHostnames empty",
+		testName: "allowedDomains empty",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -368,23 +368,23 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "allowedHostnames" must not be empty`,
+		expectedErr:    `filter "foo": "allowedDomains" must not be empty`,
 	},
 	{
-		testName: "allowedHostnames not empty and allowAllHostnames is set",
+		testName: "allowedDomains not empty and allowAllDomains is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
 dnsQueue.ipv4 = 1000
-allowAllHostnames = true
-allowedHostnames = ["foo"]`,
+allowAllDomains = true
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "allowedHostnames" must be empty when "allowAllHostnames" is true`,
+		expectedErr:    `filter "foo": "allowedDomains" must be empty when "allowAllDomains" is true`,
 	},
 	{
-		testName: "allowedHostnames not empty and allowAnswersFor is not set",
+		testName: "allowedDomains not empty and allowAnswersFor is not set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -392,12 +392,12 @@ inboundDNSQueue.ipv4 = 1
 name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "allowAnswersFor" must be set when "allowedHostnames" is not empty`,
+		expectedErr:    `filter "foo": "allowAnswersFor" must be set when "allowedDomains" is not empty`,
 	},
 	{
-		testName: "allowAllHostnames set and allowAnswersFor is set",
+		testName: "allowAllDomains set and allowAnswersFor is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -405,9 +405,9 @@ inboundDNSQueue.ipv4 = 1
 name = "foo"
 dnsQueue.ipv4 = 1000
 allowAnswersFor = "5s"
-allowAllHostnames = true`,
+allowAllDomains = true`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "allowAnswersFor" must not be set when "allowAllHostnames" is true`,
+		expectedErr:    `filter "foo": "allowAnswersFor" must not be set when "allowAllDomains" is true`,
 	},
 	{
 		testName: "negative allowAnswersFor",
@@ -419,36 +419,36 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "-1m"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "allowAnswersFor" must not be negative`,
 	},
 	{
-		testName: "cachedHostnames not empty and allowAllHostnames is set",
+		testName: "cachedDomains not empty and allowAllDomains is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
-allowAllHostnames = true
-cachedHostnames = ["foo"]`,
+allowAllDomains = true
+cachedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "cachedHostnames" must be empty when "allowAllHostnames" is true`,
+		expectedErr:    `filter "foo": "cachedDomains" must be empty when "allowAllDomains" is true`,
 	},
 	{
-		testName: "cachedHostnames not empty and reCacheEvery is not set",
+		testName: "cachedDomains not empty and reCacheEvery is not set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
 trafficQueue.ipv4 = 1001
-cachedHostnames = ["foo"]`,
+cachedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "reCacheEvery" must be set when "cachedHostnames" is not empty`,
+		expectedErr:    `filter "foo": "reCacheEvery" must be set when "cachedDomains" is not empty`,
 	},
 	{
-		testName: "cachedHostnames empty and reCacheEvery is set",
+		testName: "cachedDomains empty and reCacheEvery is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -458,9 +458,9 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 reCacheEvery = "1s"
 allowAnswersFor = "5s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "reCacheEvery" must not be set when "cachedHostnames" is empty`,
+		expectedErr:    `filter "foo": "reCacheEvery" must not be set when "cachedDomains" is empty`,
 	},
 	{
 		testName: "negative reCacheEvery",
@@ -471,12 +471,12 @@ inboundDNSQueue.ipv4 = 1
 name = "foo"
 trafficQueue.ipv4 = 1001
 reCacheEvery = "-1m"
-cachedHostnames = ["foo"]`,
+cachedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "reCacheEvery" must not be negative`,
 	},
 	{
-		testName: "dnsQueue set and cachedHostnames not empty",
+		testName: "dnsQueue set and cachedDomains not empty",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -486,9 +486,9 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 reCacheEvery = "1s"
-cachedHostnames = ["foo"]`,
+cachedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
+		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedDomains" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
 	},
 	{
 		testName: "dnsQueue and lookupUnknownIPs set",
@@ -502,7 +502,7 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
+		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedDomains" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`,
 	},
 	{
 		testName: "selfDNSQueue set",
@@ -515,12 +515,12 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`,
+		expectedErr:    `"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedDomains" is not empty`,
 	},
 	{
-		testName: "invalid allowed hostname",
+		testName: "invalid allowed domain name",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -530,12 +530,12 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = [""]`,
+allowedDomains = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": allowed hostname "" is not a valid domain name`,
+		expectedErr:    `filter "foo": allowed domain name "" is not a valid domain name`,
 	},
 	{
-		testName: "shared allowed and cached hostname",
+		testName: "shared allowed and cached domain name",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -545,14 +545,14 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]
+allowedDomains = ["foo"]
 reCacheEvery = "10s"
-cachedHostnames = ["foo"]`,
+cachedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": allowed hostname "foo" is specified as a hostname to be cached as well`,
+		expectedErr:    `filter "foo": allowed domain name "foo" is specified as a domain name to be cached as well`,
 	},
 	{
-		testName: "duplicate allowed hostname",
+		testName: "duplicate allowed domain name",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -562,15 +562,15 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = [
+allowedDomains = [
 	"twice",
 	"twice",
 ]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": allowed hostname "twice" is specified more than once`,
+		expectedErr:    `filter "foo": allowed domain name "twice" is specified more than once`,
 	},
 	{
-		testName: "invalid cached hostname",
+		testName: "invalid cached domain name",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -579,12 +579,12 @@ selfDNSQueue.ipv4 = 100
 name = "foo"
 trafficQueue.ipv4 = 1001
 reCacheEvery = "10s"
-cachedHostnames = [""]`,
+cachedDomains = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": hostname to be cached "" is not a valid domain name`,
+		expectedErr:    `filter "foo": domain name to be cached "" is not a valid domain name`,
 	},
 	{
-		testName: "duplicate cached hostname",
+		testName: "duplicate cached domain name",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -593,12 +593,12 @@ selfDNSQueue.ipv4 = 100
 name = "foo"
 trafficQueue.ipv4 = 1001
 reCacheEvery = "10s"
-cachedHostnames = [
+cachedDomains = [
 	"twice",
 	"twice",
 ]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": hostname to be cached "twice" is specified more than once`,
+		expectedErr:    `filter "foo": domain name to be cached "twice" is specified more than once`,
 	},
 	{
 		testName: "duplicate filter names",
@@ -611,14 +611,14 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]
+allowedDomains = ["foo"]
 
 [[filters]]
 name = "foo"
 dnsQueue.ipv4 = 2000
 trafficQueue.ipv4 = 2001
 allowAnswersFor = "10s"
-allowedHostnames = ["bar"]`,
+allowedDomains = ["bar"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter #1: filter name "foo" is already used by filter #0`,
 	},
@@ -633,14 +633,14 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]
+allowedDomains = ["foo"]
 
 [[filters]]
 name = "bar"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 2001
 allowAnswersFor = "10s"
-allowedHostnames = ["bar"]`,
+allowedDomains = ["bar"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "bar": "dnsQueue.ipv4" 1000 is already used by filter "foo"`,
 	},
@@ -655,14 +655,14 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]
+allowedDomains = ["foo"]
 
 [[filters]]
 name = "bar"
 dnsQueue.ipv4 = 2000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["bar"]`,
+allowedDomains = ["bar"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "bar": "trafficQueue.ipv4" 1001 is already used by filter "foo"`,
 	},
@@ -678,7 +678,7 @@ dnsQueue.ipv4 = 100
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "selfDNSQueue" and "dnsQueue" must be different`,
 	},
@@ -694,19 +694,19 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 100
 lookupUnknownIPs = true
 allowAnswersFor = "10s"
-allowedHostnames = ["foo"]`,
+allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "selfDNSQueue" and "trafficQueue" must be different`,
 	},
 	{
-		testName: "valid allowAllHostnames is set",
+		testName: "valid allowAllDomains is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
 [[filters]]
 name = "foo"
 dnsQueue.ipv4 = 1000
-allowAllHostnames = true`,
+allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -717,14 +717,14 @@ allowAllHostnames = true`,
 					DNSQueue: queue{
 						IPv4: 1000,
 					},
-					AllowAllHostnames: true,
+					AllowAllDomains: true,
 				},
 			},
 		},
 		expectedErr: "",
 	},
 	{
-		testName: "valid allowAllHostnames is not set",
+		testName: "valid allowAllDomains is not set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -733,7 +733,7 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
@@ -752,7 +752,7 @@ allowedHostnames = [
 						IPv4: 1001,
 					},
 					AllowAnswersFor: 5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 						"baz.barf",
@@ -763,7 +763,7 @@ allowedHostnames = [
 		expectedErr: "",
 	},
 	{
-		testName: "valid allowAllHostnames mixed",
+		testName: "valid allowAllDomains mixed",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 
@@ -772,7 +772,7 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
@@ -781,7 +781,7 @@ allowedHostnames = [
 [[filters]]
 name = "bar"
 dnsQueue.ipv4 = 2000
-allowAllHostnames = true`,
+allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -796,7 +796,7 @@ allowAllHostnames = true`,
 						IPv4: 1001,
 					},
 					AllowAnswersFor: 5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 						"baz.barf",
@@ -807,14 +807,14 @@ allowAllHostnames = true`,
 					DNSQueue: queue{
 						IPv4: 2000,
 					},
-					AllowAllHostnames: true,
+					AllowAllDomains: true,
 				},
 			},
 		},
 		expectedErr: "",
 	},
 	{
-		testName: "valid cachedHostnames",
+		testName: "valid cachedDomains",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -823,7 +823,7 @@ selfDNSQueue.ipv4 = 100
 name = "foo"
 trafficQueue.ipv4 = 1001
 reCacheEvery = "1s"
-cachedHostnames = [
+cachedDomains = [
 	"oof",
 	"rab",
 ]`,
@@ -840,7 +840,7 @@ cachedHostnames = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -851,7 +851,7 @@ cachedHostnames = [
 						IPv4: 1001,
 					},
 					ReCacheEvery: time.Second,
-					CachedHostnames: []string{
+					CachedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -883,7 +883,7 @@ lookupUnknownIPs = true`,
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"in-addr.arpa",
 						"ip6.arpa",
 					},
@@ -900,7 +900,7 @@ lookupUnknownIPs = true`,
 		expectedErr: "",
 	},
 	{
-		testName: "valid allowedHostnames and cachedHostnames",
+		testName: "valid allowedDomains and cachedDomains",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -910,12 +910,12 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 reCacheEvery = "1s"
-cachedHostnames = [
+cachedDomains = [
 	"oof",
 	"rab",
 ]
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
@@ -933,7 +933,7 @@ allowedHostnames = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -948,12 +948,12 @@ allowedHostnames = [
 					},
 					ReCacheEvery:    time.Second,
 					AllowAnswersFor: 5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 						"baz.barf",
 					},
-					CachedHostnames: []string{
+					CachedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -974,7 +974,7 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
@@ -992,7 +992,7 @@ allowedHostnames = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"in-addr.arpa",
 						"ip6.arpa",
 					},
@@ -1007,7 +1007,7 @@ allowedHostnames = [
 					},
 					LookupUnknownIPs: true,
 					AllowAnswersFor:  5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 						"baz.barf",
@@ -1018,7 +1018,7 @@ allowedHostnames = [
 		expectedErr: "",
 	},
 	{
-		testName: "valid lookupUnknownIPs is set and cachedHostnames is not empty",
+		testName: "valid lookupUnknownIPs is set and cachedDomains is not empty",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
 selfDNSQueue.ipv4 = 100
@@ -1029,12 +1029,12 @@ dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 lookupUnknownIPs = true
 reCacheEvery = "1s"
-cachedHostnames = [
+cachedDomains = [
 	"oof",
 	"rab",
 ]
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
@@ -1052,7 +1052,7 @@ allowedHostnames = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"in-addr.arpa",
 						"ip6.arpa",
 						"oof",
@@ -1070,12 +1070,12 @@ allowedHostnames = [
 					LookupUnknownIPs: true,
 					ReCacheEvery:     time.Second,
 					AllowAnswersFor:  5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 						"baz.barf",
 					},
-					CachedHostnames: []string{
+					CachedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -1099,7 +1099,7 @@ dnsQueue.ipv6 = 1010
 trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "5s"
-allowedHostnames = [
+allowedDomains = [
 	"foo",
 	"bar",
 ]
@@ -1115,7 +1115,7 @@ name = "test3"
 trafficQueue.ipv4 = 3001
 trafficQueue.ipv6 = 3011
 reCacheEvery = "1s"
-cachedHostnames = [
+cachedDomains = [
 	"oof",
 	"rab",
 ]
@@ -1124,7 +1124,7 @@ cachedHostnames = [
 name = "test4"
 dnsQueue.ipv4 = 4000
 dnsQueue.ipv6 = 4010
-allowAllHostnames = true`,
+allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: queue{
 				IPv4: 1,
@@ -1141,7 +1141,7 @@ allowAllHostnames = true`,
 						IPv4: 100,
 						IPv6: 110,
 					},
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"in-addr.arpa",
 						"ip6.arpa",
 						"oof",
@@ -1159,7 +1159,7 @@ allowAllHostnames = true`,
 						IPv6: 1011,
 					},
 					AllowAnswersFor: 5 * time.Second,
-					AllowedHostnames: []string{
+					AllowedDomains: []string{
 						"foo",
 						"bar",
 					},
@@ -1179,7 +1179,7 @@ allowAllHostnames = true`,
 						IPv6: 3011,
 					},
 					ReCacheEvery: time.Second,
-					CachedHostnames: []string{
+					CachedDomains: []string{
 						"oof",
 						"rab",
 					},
@@ -1190,7 +1190,7 @@ allowAllHostnames = true`,
 						IPv4: 4000,
 						IPv6: 4010,
 					},
-					AllowAllHostnames: true,
+					AllowAllDomains: true,
 				},
 			},
 		},

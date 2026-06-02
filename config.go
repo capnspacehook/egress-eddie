@@ -65,15 +65,15 @@ type Config struct {
 }
 
 type FilterOptions struct {
-	Name              string
-	DNSQueue          queue
-	TrafficQueue      queue
-	AllowAllHostnames bool
-	LookupUnknownIPs  bool
-	AllowAnswersFor   time.Duration
-	ReCacheEvery      time.Duration
-	AllowedHostnames  []string
-	CachedHostnames   []string
+	Name             string
+	DNSQueue         queue
+	TrafficQueue     queue
+	AllowAllDomains  bool
+	LookupUnknownIPs bool
+	AllowAnswersFor  time.Duration
+	ReCacheEvery     time.Duration
+	AllowedDomains   []string
+	CachedDomains    []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -120,7 +120,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 	var (
 		preformReverseLookups bool
-		allCachedHostnames    []string
+		allCachedDomains      []string
 
 		filterNames  = make(map[string]int)
 		filterQueues = make(map[uint16]string)
@@ -131,7 +131,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
 		}
 
-		if !filterOpt.DNSQueue.eitherSet() && len(filterOpt.CachedHostnames) == 0 && !filterOpt.LookupUnknownIPs {
+		if !filterOpt.DNSQueue.eitherSet() && len(filterOpt.CachedDomains) == 0 && !filterOpt.LookupUnknownIPs {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must be set`, filterOpt.Name)
 		}
 		if !filterOpt.DNSQueue.valid() {
@@ -149,14 +149,14 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if !ipv6Used && filterOpt.DNSQueue.bothSet() {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`, filterOpt.Name)
 		}
-		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedHostnames) == 0 && (len(filterOpt.CachedHostnames) > 0 || filterOpt.LookupUnknownIPs) {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedHostnames" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
+		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedDomains) == 0 && (len(filterOpt.CachedDomains) > 0 || filterOpt.LookupUnknownIPs) {
+			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
 		}
 		if queuesShared(config.InboundDNSQueue, filterOpt.DNSQueue) {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
 		}
 
-		if !filterOpt.TrafficQueue.eitherSet() && !filterOpt.AllowAllHostnames {
+		if !filterOpt.TrafficQueue.eitherSet() && !filterOpt.AllowAllDomains {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
 		}
 		if !filterOpt.TrafficQueue.valid() {
@@ -174,8 +174,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if !ipv6Used && filterOpt.TrafficQueue.bothSet() {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`, filterOpt.Name)
 		}
-		if filterOpt.TrafficQueue.eitherSet() && filterOpt.AllowAllHostnames {
-			return nil, fmt.Errorf(`filter %q: "trafficQueue" must not be set when "allowAllHostnames" is true`, filterOpt.Name)
+		if filterOpt.TrafficQueue.eitherSet() && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "trafficQueue" must not be set when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if queuesShared(config.InboundDNSQueue, filterOpt.TrafficQueue) {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "trafficQueue" must be different`, filterOpt.Name)
@@ -185,52 +185,52 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
-		if len(filterOpt.AllowedHostnames) == 0 && !filterOpt.AllowAllHostnames && len(filterOpt.CachedHostnames) == 0 && !filterOpt.LookupUnknownIPs {
-			return nil, fmt.Errorf(`filter %q: "allowedHostnames" must not be empty`, filterOpt.Name)
+		if len(filterOpt.AllowedDomains) == 0 && !filterOpt.AllowAllDomains && len(filterOpt.CachedDomains) == 0 && !filterOpt.LookupUnknownIPs {
+			return nil, fmt.Errorf(`filter %q: "allowedDomains" must not be empty`, filterOpt.Name)
 		}
-		if len(filterOpt.AllowedHostnames) > 0 && filterOpt.AllowAllHostnames {
-			return nil, fmt.Errorf(`filter %q: "allowedHostnames" must be empty when "allowAllHostnames" is true`, filterOpt.Name)
+		if len(filterOpt.AllowedDomains) > 0 && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "allowedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
-		if filterOpt.AllowAnswersFor == 0 && len(filterOpt.AllowedHostnames) > 0 {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowedHostnames" is not empty`, filterOpt.Name)
+		if filterOpt.AllowAnswersFor == 0 && len(filterOpt.AllowedDomains) > 0 {
+			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowedDomains" is not empty`, filterOpt.Name)
 		}
-		if filterOpt.AllowAnswersFor != 0 && filterOpt.AllowAllHostnames {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be set when "allowAllHostnames" is true`, filterOpt.Name)
+		if filterOpt.AllowAnswersFor != 0 && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be set when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if filterOpt.AllowAnswersFor < 0 {
 			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be negative`, filterOpt.Name)
 		}
 
-		if len(filterOpt.CachedHostnames) > 0 && filterOpt.AllowAllHostnames {
-			return nil, fmt.Errorf(`filter %q: "cachedHostnames" must be empty when "allowAllHostnames" is true`, filterOpt.Name)
+		if len(filterOpt.CachedDomains) > 0 && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "cachedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
-		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedHostnames) > 0 {
-			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedHostnames" is not empty`, filterOpt.Name)
+		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedDomains) > 0 {
+			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedDomains" is not empty`, filterOpt.Name)
 		}
-		if filterOpt.ReCacheEvery != 0 && len(filterOpt.CachedHostnames) == 0 {
-			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedHostnames" is empty`, filterOpt.Name)
+		if filterOpt.ReCacheEvery != 0 && len(filterOpt.CachedDomains) == 0 {
+			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedDomains" is empty`, filterOpt.Name)
 		}
 		if filterOpt.ReCacheEvery < 0 {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be negative`, filterOpt.Name)
 		}
 
-		for i, name := range filterOpt.AllowedHostnames {
+		for i, name := range filterOpt.AllowedDomains {
 			if !validDomainName(name) {
-				return nil, fmt.Errorf("filter %q: allowed hostname %q is not a valid domain name", filterOpt.Name, name)
+				return nil, fmt.Errorf("filter %q: allowed domain name %q is not a valid domain name", filterOpt.Name, name)
 			}
-			if slices.Contains(filterOpt.CachedHostnames, name) {
-				return nil, fmt.Errorf("filter %q: allowed hostname %q is specified as a hostname to be cached as well", filterOpt.Name, name)
+			if slices.Contains(filterOpt.CachedDomains, name) {
+				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
-			if i != len(filterOpt.AllowedHostnames)-1 && slices.Contains(filterOpt.AllowedHostnames[i+1:], name) {
-				return nil, fmt.Errorf("filter %q: allowed hostname %q is specified more than once", filterOpt.Name, name)
+			if i != len(filterOpt.AllowedDomains)-1 && slices.Contains(filterOpt.AllowedDomains[i+1:], name) {
+				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
-		for i, name := range filterOpt.CachedHostnames {
+		for i, name := range filterOpt.CachedDomains {
 			if !validDomainName(name) {
-				return nil, fmt.Errorf("filter %q: hostname to be cached %q is not a valid domain name", filterOpt.Name, name)
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is not a valid domain name", filterOpt.Name, name)
 			}
-			if i != len(filterOpt.CachedHostnames)-1 && slices.Contains(filterOpt.CachedHostnames[i+1:], name) {
-				return nil, fmt.Errorf("filter %q: hostname to be cached %q is specified more than once", filterOpt.Name, name)
+			if i != len(filterOpt.CachedDomains)-1 && slices.Contains(filterOpt.CachedDomains[i+1:], name) {
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
@@ -261,8 +261,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.LookupUnknownIPs {
 			preformReverseLookups = true
 		}
-		if len(filterOpt.CachedHostnames) > 0 {
-			allCachedHostnames = append(allCachedHostnames, filterOpt.CachedHostnames...)
+		if len(filterOpt.CachedDomains) > 0 {
+			allCachedDomains = append(allCachedDomains, filterOpt.CachedDomains...)
 		}
 
 		filterNames[filterOpt.Name] = i
@@ -280,11 +280,11 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 	}
 
-	if !config.SelfDNSQueue.eitherSet() && (preformReverseLookups || len(allCachedHostnames) > 0) {
-		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`)
+	if !config.SelfDNSQueue.eitherSet() && (preformReverseLookups || len(allCachedDomains) > 0) {
+		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedDomains" is not empty`)
 	}
-	if config.SelfDNSQueue.eitherSet() && !preformReverseLookups && len(allCachedHostnames) == 0 {
-		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedHostnames" is not empty`)
+	if config.SelfDNSQueue.eitherSet() && !preformReverseLookups && len(allCachedDomains) == 0 {
+		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedDomains" is not empty`)
 	}
 	if !config.SelfDNSQueue.valid() {
 		return nil, errors.New(`"selfDNSQueue.ipv4" and "selfDNSQueue.ipv6" cannot be the same`)
@@ -323,13 +323,13 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 
 		if preformReverseLookups {
-			selfFilter.AllowedHostnames = []string{
+			selfFilter.AllowedDomains = []string{
 				"in-addr.arpa",
 				"ip6.arpa",
 			}
 		}
-		if len(allCachedHostnames) > 0 {
-			selfFilter.AllowedHostnames = append(selfFilter.AllowedHostnames, allCachedHostnames...)
+		if len(allCachedDomains) > 0 {
+			selfFilter.AllowedDomains = append(selfFilter.AllowedDomains, allCachedDomains...)
 		}
 
 		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)

@@ -64,8 +64,8 @@ func (m *mockEnforcer) Close() error {
 }
 
 type mockResolver struct {
-	addrs     map[string][]netip.Addr
-	hostnames map[string][]string
+	addrs   map[string][]netip.Addr
+	domains map[string][]string
 }
 
 func (m *mockResolver) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
@@ -81,11 +81,11 @@ func (m *mockResolver) LookupNetIP(_ context.Context, _ string, host string) ([]
 }
 
 func (m *mockResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
-	if m.hostnames == nil {
+	if m.domains == nil {
 		return nil, &net.DNSError{IsNotFound: true}
 	}
 
-	if addrs, ok := m.hostnames[addr]; ok {
+	if addrs, ok := m.domains[addr]; ok {
 		return addrs, nil
 	}
 

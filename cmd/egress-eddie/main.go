@@ -22,12 +22,12 @@ import (
 //nolint:vet
 func usage() {
 	fmt.Fprint(os.Stderr, `
-Egress Eddie filters arbitrary outbound network traffic by hostname.
+Egress Eddie filters arbitrary outbound network traffic by domain names.
 
 	eddie-eddie [flags]
 
 Egress Eddie filters DNS traffic and only allows requests and replies to
-specified hostnames. It then caches the IP addresses from allowed DNS replies
+specified domains. It then caches the IP addresses from allowed DNS replies
 and only allows traffic to go to them.
 
 Egress Eddie requires nftables/iptables rules to be set to function correctly;
