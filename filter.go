@@ -422,9 +422,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger) {
 		timer.Reset(f.opts.ReCacheEvery)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			logger.Debug("exiting cache loop")
 			return
 		case <-timer.C:
@@ -849,6 +847,10 @@ func newGenericCallback(ctx context.Context, f *filter) hookCreator {
 
 			if err := parser.DecodeLayers(*attr.Payload, &decoded); err != nil {
 				logger.Error("error parsing packet", zap.Error(err))
+				return dropVerdict
+			}
+			if len(decoded) == 0 {
+				logger.Warn("got packet with no layers")
 				return dropVerdict
 			}
 

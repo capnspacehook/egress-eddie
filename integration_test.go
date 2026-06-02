@@ -33,6 +33,8 @@ var (
 )
 
 func requireRoot(t *testing.T) {
+	t.Helper()
+
 	if os.Geteuid() != 0 {
 		t.Skip("skipping test because not running as root")
 	}
