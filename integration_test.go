@@ -30,6 +30,16 @@ var (
 	enableIPv6 = flag.Bool("enable-ipv6", true, "enable testing IPv6")
 )
 
+type skipper interface {
+	SkipNow()
+}
+
+func skipIfTestingBinary(t skipper) {
+	if *binaryTests {
+		t.SkipNow()
+	}
+}
+
 func TestFiltering(t *testing.T) {
 	configStr := `
 inboundDNSQueue.ipv4 = 1

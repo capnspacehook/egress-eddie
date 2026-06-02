@@ -24,6 +24,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Install uv for hegel
+        run: |
+          sudo apt-get install uv
+
       - name: Restore Go cache
         uses: capnspacehook/cache-go/restore@v2.0.1
 
@@ -92,7 +96,8 @@ jobs:
           cache-fuzz-corpus: true
 
       - run: |
-          go test -fuzz Fuzz -run Config -fuzztime 10m
+          go test -fuzz FuzzFilters -run Config -fuzztime 5m
+          go test -fuzz FuzzVerdicts -run Config -fuzztime 5m
 
       - name: Save Go cache
         if: always()

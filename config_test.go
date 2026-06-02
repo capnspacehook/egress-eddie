@@ -1183,6 +1183,8 @@ allowAllDomains = true`,
 }
 
 func TestParseConfig(t *testing.T) {
+	skipIfTestingBinary(t)
+
 	is := is.New(t)
 	for _, tt := range configTests {
 		t.Run(tt.testName, func(t *testing.T) {

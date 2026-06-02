@@ -17,6 +17,8 @@ import (
 )
 
 func TestDomainAllowed(t *testing.T) {
+	skipIfTestingBinary(t)
+
 	hegel.Test(t, func(ht *hegel.T) {
 		allowedDomain := hegel.Draw(ht, hegel.Domains())
 		label := string(hegel.Draw(ht, hegel.Binary(1, 63)))
@@ -93,9 +95,7 @@ func checkDomainAllowed(ht *hegel.T, f *filter, domain string) bool {
 }
 
 func TestFiltersStart(t *testing.T) {
-	if *binaryTests {
-		t.Skip()
-	}
+	skipIfTestingBinary(t)
 
 	configBytes := []byte(`
 inboundDNSQueue.ipv6 = 10
