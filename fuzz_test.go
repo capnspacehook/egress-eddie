@@ -35,8 +35,6 @@ var (
 )
 
 func FuzzFiltering(f *testing.F) {
-	skipIfTestingBinary(f)
-
 	for _, tt := range configTests {
 		// only add valid configs to the corpus
 		if strings.HasPrefix(tt.testName, "valid") {
@@ -730,8 +728,6 @@ func sendPacket(t *testing.T, logger *zap.Logger, cb []byte, e *mockEnforcer, op
 }
 
 func FuzzVerdicts(f *testing.F) {
-	skipIfTestingBinary(f)
-
 	packetDir := filepath.Join("testdata", "dnsPackets")
 	entries, err := os.ReadDir(packetDir)
 	if err != nil {
