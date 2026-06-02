@@ -11,6 +11,7 @@ import (
 	_ "unsafe" // only needed for go:linkname directive
 
 	"github.com/BurntSushi/toml"
+	"github.com/miekg/dns"
 )
 
 const selfFilterName = "self-filter"
@@ -338,19 +339,10 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 }
 
 func validDomainName(dn string) bool {
-	if !isDomainName(dn) {
-		return false
-	}
-	// A domain name ending with a dot is technically allowed (I think),
-	// but because seemingly all DNS clients chop off the trailing dot
-	// when making DNS requests, Egress Eddie can't properly validate
-	// these domains. For simplicity, don't allow them.
-	if dn[len(dn)-1] == '.' {
+	if dn == "" {
 		return false
 	}
 
-	return true
+	_, ok := dns.IsDomainName(dn)
+	return ok
 }
-
-//go:linkname isDomainName net.isDomainName
-func isDomainName(s string) bool

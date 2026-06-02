@@ -14,6 +14,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/mdlayher/netlink"
+	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
@@ -657,7 +658,7 @@ func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
 
 func (f *filter) hostnameAllowed(hostname string) bool {
 	for j := range f.opts.AllowedHostnames {
-		if hostname == f.opts.AllowedHostnames[j] || strings.HasSuffix(hostname, "."+f.opts.AllowedHostnames[j]) {
+		if hostname == f.opts.AllowedHostnames[j] || dns.IsSubDomain(f.opts.AllowedHostnames[j], hostname) {
 			return true
 		}
 	}

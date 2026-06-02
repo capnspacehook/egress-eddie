@@ -530,9 +530,9 @@ name = "foo"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
-allowedHostnames = ["foo."]`,
+allowedHostnames = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": allowed hostname "foo." is not a valid domain name`,
+		expectedErr:    `filter "foo": allowed hostname "" is not a valid domain name`,
 	},
 	{
 		testName: "shared allowed and cached hostname",
@@ -579,9 +579,9 @@ selfDNSQueue.ipv4 = 100
 name = "foo"
 trafficQueue.ipv4 = 1001
 reCacheEvery = "10s"
-cachedHostnames = ["foo."]`,
+cachedHostnames = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": hostname to be cached "foo." is not a valid domain name`,
+		expectedErr:    `filter "foo": hostname to be cached "" is not a valid domain name`,
 	},
 	{
 		testName: "duplicate cached hostname",
@@ -1208,6 +1208,7 @@ func TestParseConfig(t *testing.T) {
 			if tt.expectedErr == "" {
 				is.NoErr(err)
 			} else {
+				is.True(err != nil)
 				is.Equal(err.Error(), tt.expectedErr)
 			}
 			is.Equal(config, tt.expectedConfig)
