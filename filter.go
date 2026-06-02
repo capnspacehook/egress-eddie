@@ -587,12 +587,15 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		srcOK, dstOK     bool
 	)
 
-	if decoded[0] == layers.LayerTypeIPv4 {
+	switch decoded[0] {
+	case layers.LayerTypeIPv4:
 		src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
 		dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
-	} else if decoded[0] == layers.LayerTypeIPv6 {
+	case layers.LayerTypeIPv6:
 		src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
 		dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
+	default:
+		return nil, connectionID{}, fmt.Errorf("unknown IP protocol %s", decoded[0])
 	}
 	if !srcOK || !dstOK {
 		return nil, connectionID{}, errors.New("error converting IPs")
@@ -854,20 +857,24 @@ func newGenericCallback(ctx context.Context, f *filter) hookCreator {
 				src, dst     netip.Addr
 				srcOK, dstOK bool
 			)
-			if decoded[0] == layers.LayerTypeIPv4 {
+			switch decoded[0] {
+			case layers.LayerTypeIPv4:
 				src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
 				dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
 				if !srcOK || !dstOK {
 					logger.Error("error converting IPs", zap.Stringer("conn.src", ip4.SrcIP), zap.Stringer("conn.dst", ip4.DstIP))
 					return dropVerdict
 				}
-			} else if decoded[0] == layers.LayerTypeIPv6 {
+			case layers.LayerTypeIPv6:
 				src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
 				dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
 				if !srcOK || !dstOK {
 					logger.Error("error converting IPs", zap.Stringer("conn.src", ip6.SrcIP), zap.Stringer("conn.dst", ip6.DstIP))
 					return dropVerdict
 				}
+			default:
+				logger.Error("unknown IP protocol", zap.Stringer("protocol", decoded[0]))
+				return dropVerdict
 			}
 
 			// validate that either the source or destination IP is allowed
