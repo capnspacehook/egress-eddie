@@ -141,6 +141,16 @@ type resolver interface {
 	LookupAddr(ctx context.Context, addr string) ([]string, error)
 }
 
+type verdict int
+
+const (
+	dropVerdict   verdict = nfqueue.NfDrop
+	acceptVerdict verdict = nfqueue.NfAccept
+	// ignoreVerdict is not a nfqueue verdict type, it signals that the
+	// verdict can't be set and the packet should be ignored
+	ignoreVerdict verdict = 10
+)
+
 type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, hook nfqueue.HookFunc) (enforcer, error)
 
 // CreateFilters creates packet filters. The returned FilterManager can
@@ -389,7 +399,7 @@ func (f *filter) cacheHostnames(ctx context.Context, logger *zap.Logger) {
 					logger.Warn("could not resolve hostname", zap.String("hostname", f.opts.CachedHostnames[i]))
 					continue
 				}
-				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.NamedError("error", err))
+				logger.Error("error resolving hostname", zap.String("hostname", f.opts.CachedHostnames[i]), zap.Error(err))
 				continue
 			}
 
@@ -472,70 +482,53 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
-	return func(attr nfqueue.Attribute) int {
+	callback := func(attr nfqueue.Attribute) verdict {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
 		case <-f.dnsReqSignaler.isReady():
+		case <-f.dnsReqSignaler.shouldAbort():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
-		case <-f.dnsReqSignaler.shouldAbort():
-			return 0
-		}
-
-		var dnsReqNF enforcer
-		if !ipv6 {
-			dnsReqNF = f.dnsReqNF4
-		} else {
-			dnsReqNF = f.dnsReqNF6
+			return ignoreVerdict
 		}
 
 		if attr.PacketID == nil {
 			logger.Warn("got packet with no packet ID")
-			return 0
+			return ignoreVerdict
 		}
 		if attr.CtInfo == nil {
 			logger.Warn("got packet with no connection state")
-			return 0
+			return dropVerdict
 		}
 		if attr.Payload == nil {
 			logger.Warn("got packet with no payload")
-			return 0
+			return dropVerdict
 		}
 
 		// verify DNS request is from a new or established connection
 		if *attr.CtInfo != stateNew && !connIsEstablished(*attr.CtInfo) {
 			logger.Warn("dropping DNS request with unknown state", zap.Uint32("conn.state", *attr.CtInfo))
-
-			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
-			}
-			return 0
+			return dropVerdict
 		}
 
 		dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
 		if err != nil {
-			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
-			return 0
+			logger.Error("error parsing DNS packet", zap.Error(err))
+			return dropVerdict
 		}
 		logger := logger.With(zap.Stringer("conn.id", connID))
 
 		// drop DNS replies, they shouldn't be going to this filter
 		if dns.QR || dns.ANCount > 0 {
 			logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
-			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.String("error", err.Error()))
-			}
-			return 0
+			return dropVerdict
 		}
 
 		// validate DNS request questions are for allowed
 		// hostnames, drop them otherwise
 		if !f.opts.AllowAllHostnames && !f.validateDNSQuestions(dns) {
 			logger.Warn("dropping DNS request", dnsFields(dns, f.fullDNSLogging)...)
-			if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.NamedError("error", err))
-			}
-			return 0
+			return dropVerdict
 		}
 
 		logger.Info("allowing DNS request", dnsFields(dns, f.fullDNSLogging)...)
@@ -543,18 +536,35 @@ func newDNSRequestCallback(f *filter, ipv6 bool) nfqueue.HookFunc {
 		logger.Debug("adding connection")
 		f.connections.AddEntry(connID, dnsQueryTimeout)
 
-		if err := dnsReqNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
-			logger.Error("error setting verdict", zap.NamedError("error", err))
-			logger.Debug("removing connection")
-			f.connections.RemoveEntry(connID)
+		return acceptVerdict
+	}
+
+	return func(attr nfqueue.Attribute) int {
+		var dnsReqNF enforcer
+		if !ipv6 {
+			dnsReqNF = f.dnsReqNF4
+		} else {
+			dnsReqNF = f.dnsReqNF6
 		}
 
+		v := callback(attr)
+		setVerdict(logger, dnsReqNF, attr, v)
 		return 0
 	}
 }
 
 func connIsEstablished(state uint32) bool {
-	return state == stateEstablished || state == stateRelated || state == stateIsReply || state == stateRelatedReply
+	return state == stateEstablished || state == stateRelated || state == stateEstablishedReply || state == stateRelatedReply
+}
+
+func setVerdict(logger *zap.Logger, e enforcer, attr nfqueue.Attribute, v verdict) {
+	if v == ignoreVerdict {
+		return
+	}
+
+	if err := e.SetVerdict(*attr.PacketID, int(v)); err != nil {
+		logger.Error("error setting verdict", zap.Error(err))
+	}
 }
 
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionID, error) {
@@ -673,34 +683,27 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
-	return func(attr nfqueue.Attribute) int {
+	callback := func(attr nfqueue.Attribute) verdict {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
 		case <-f.signaler.isReady():
 		case <-f.signaler.shouldAbort():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
-			return 0
-		}
-
-		var dnsRespNF enforcer
-		if !ipv6 {
-			dnsRespNF = f.dnsRespNF4
-		} else {
-			dnsRespNF = f.dnsRespNF6
+			return ignoreVerdict
 		}
 
 		if attr.PacketID == nil {
 			logger.Warn("got packet with no packet ID")
-			return 0
+			return ignoreVerdict
 		}
 		if attr.CtInfo == nil {
 			logger.Warn("got packet with no connection state")
-			return 0
+			return dropVerdict
 		}
 		if attr.Payload == nil {
 			logger.Warn("got packet with no payload")
-			return 0
+			return dropVerdict
 		}
 
 		// since DNS requests are filtered above, we only process
@@ -710,17 +713,13 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 		// as an answer, thereby allowing that IP
 		if !connIsEstablished(*attr.CtInfo) {
 			logger.Warn("dropping DNS response with that is not from an established connection", zap.Uint32("conn.state", *attr.CtInfo))
-
-			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.NamedError("error", err))
-			}
-			return 0
+			return dropVerdict
 		}
 
 		dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 		if err != nil {
-			logger.Error("error parsing DNS packet", zap.NamedError("error", err))
-			return 0
+			logger.Error("error parsing DNS packet", zap.Error(err))
+			return dropVerdict
 		}
 		logger := logger.With(zap.Stringer("conn.id", connID))
 
@@ -733,11 +732,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 		}
 		if connFilter == nil {
 			logger.Warn("dropping DNS response from unknown connection", dnsFields(dns, f.fullDNSLogging)...)
-
-			if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-				logger.Error("error setting verdict", zap.NamedError("error", err))
-			}
-			return 0
+			return dropVerdict
 		}
 		logger.Debug("removing connection")
 		connFilter.connections.RemoveEntry(connID)
@@ -753,10 +748,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 			// hurt to check
 			if !connFilter.validateDNSQuestions(dns) {
 				logger.Info("dropping DNS reply", dnsFields(dns, f.fullDNSLogging)...)
-				if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-					logger.Error("error setting verdict", zap.NamedError("error", err))
-				}
-				return 0
+				return dropVerdict
 			}
 
 			// don't process the DNS response if the filter it came
@@ -767,10 +759,7 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 					aName := string(answer.Name)
 					if !connFilter.hostnameAllowed(aName) {
 						logger.Info("dropping DNS reply", zap.ByteString("answer", answer.Name))
-						if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfDrop); err != nil {
-							logger.Error("error setting verdict", zap.NamedError("error", err))
-						}
-						return 0
+						return dropVerdict
 					}
 
 					switch answer.Type {
@@ -815,10 +804,20 @@ func newDNSResponseCallback(f *FilterManager, ipv6 bool) nfqueue.HookFunc {
 		}
 
 		logger.Info("allowing DNS reply", dnsFields(dns, f.fullDNSLogging)...)
-		if err := dnsRespNF.SetVerdict(*attr.PacketID, nfqueue.NfAccept); err != nil {
-			logger.Error("error setting verdict", zap.NamedError("error", err))
+
+		return acceptVerdict
+	}
+
+	return func(attr nfqueue.Attribute) int {
+		var dnsRespNF enforcer
+		if !ipv6 {
+			dnsRespNF = f.dnsRespNF4
+		} else {
+			dnsRespNF = f.dnsRespNF6
 		}
 
+		v := callback(attr)
+		setVerdict(logger, dnsRespNF, attr, v)
 		return 0
 	}
 }
@@ -835,30 +834,23 @@ func newGenericCallback(ctx context.Context, f *filter, ipv6 bool) nfqueue.HookF
 	logger = logger.With(zap.Uint16("queue.num", queueNum))
 	logger.Info("started nfqueue")
 
-	return func(attr nfqueue.Attribute) int {
+	callback := func(attr nfqueue.Attribute) verdict {
 		// wait until the filter manager is setup to prevent race conditions
 		select {
 		case <-f.genericSignaler.isReady():
 		case <-f.genericSignaler.shouldAbort():
 			// the filter manager has been stopped before it was started,
 			// return so the parent filter can finish cleaning up
-			return 0
-		}
-
-		var genericNF enforcer
-		if !ipv6 {
-			genericNF = f.genericNF4
-		} else {
-			genericNF = f.genericNF6
+			return ignoreVerdict
 		}
 
 		if attr.PacketID == nil {
 			logger.Warn("got packet with no packet ID")
-			return 0
+			return ignoreVerdict
 		}
 		if attr.Payload == nil {
 			logger.Warn("got packet with no payload")
-			return 0
+			return dropVerdict
 		}
 
 		var (
@@ -882,8 +874,8 @@ func newGenericCallback(ctx context.Context, f *filter, ipv6 bool) nfqueue.HookF
 		}
 
 		if err := parser.DecodeLayers(*attr.Payload, &decoded); err != nil {
-			logger.Error("error parsing packet", zap.NamedError("error", err))
-			return 0
+			logger.Error("error parsing packet", zap.Error(err))
+			return dropVerdict
 		}
 
 		// get source and destination IP
@@ -896,37 +888,46 @@ func newGenericCallback(ctx context.Context, f *filter, ipv6 bool) nfqueue.HookF
 			dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
 			if !srcOK || !dstOK {
 				logger.Error("error converting IPs", zap.Stringer("conn.src", ip4.SrcIP), zap.Stringer("conn.dst", ip4.DstIP))
-				return 0
+				return dropVerdict
 			}
 		} else if decoded[0] == layers.LayerTypeIPv6 {
 			src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
 			dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
 			if !srcOK || !dstOK {
 				logger.Error("error converting IPs", zap.Stringer("conn.src", ip6.SrcIP), zap.Stringer("conn.dst", ip6.DstIP))
-				return 0
+				return dropVerdict
 			}
 		}
 
 		// validate that either the source or destination IP is allowed
-		var verdict int
+		var v verdict
 		allowed, err := f.validateIPs(ctx, logger, src, dst)
 		if err != nil {
-			logger.Error("error validating IPs", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst), zap.NamedError("error", err))
-			verdict = nfqueue.NfDrop
+			logger.Error("error validating IPs", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst), zap.Error(err))
+			v = dropVerdict
 		} else {
 			if allowed {
 				logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
-				verdict = nfqueue.NfAccept
+				v = acceptVerdict
 			} else {
 				logger.Info("dropping packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
-				verdict = nfqueue.NfDrop
+				v = dropVerdict
 			}
 		}
 
-		if err := genericNF.SetVerdict(*attr.PacketID, verdict); err != nil {
-			logger.Error("error setting verdict", zap.NamedError("error", err))
+		return v
+	}
+
+	return func(attr nfqueue.Attribute) int {
+		var genericNF enforcer
+		if !ipv6 {
+			genericNF = f.genericNF4
+		} else {
+			genericNF = f.genericNF6
 		}
 
+		v := callback(attr)
+		setVerdict(logger, genericNF, attr, v)
 		return 0
 	}
 }
@@ -1008,7 +1009,7 @@ func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {
 			}
 		}
 
-		logger.Error("netlink error", zap.NamedError("error", err))
+		logger.Error("netlink error", zap.Error(err))
 
 		return 0
 	}
