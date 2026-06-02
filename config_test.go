@@ -883,10 +883,7 @@ lookupUnknownIPs = true`,
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedDomains: []string{
-						"in-addr.arpa",
-						"ip6.arpa",
-					},
+					AllowedDomains: arpaDomains,
 				},
 				{
 					Name: "foo",
@@ -992,10 +989,7 @@ allowedDomains = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedDomains: []string{
-						"in-addr.arpa",
-						"ip6.arpa",
-					},
+					AllowedDomains: arpaDomains,
 				},
 				{
 					Name: "foo",
@@ -1052,12 +1046,7 @@ allowedDomains = [
 					DNSQueue: queue{
 						IPv4: 100,
 					},
-					AllowedDomains: []string{
-						"in-addr.arpa",
-						"ip6.arpa",
-						"oof",
-						"rab",
-					},
+					AllowedDomains: append(arpaDomains, "oof", "rab"),
 				},
 				{
 					Name: "foo",
@@ -1141,12 +1130,7 @@ allowAllDomains = true`,
 						IPv4: 100,
 						IPv6: 110,
 					},
-					AllowedDomains: []string{
-						"in-addr.arpa",
-						"ip6.arpa",
-						"oof",
-						"rab",
-					},
+					AllowedDomains: append(arpaDomains, "oof", "rab"),
 				},
 				{
 					Name: "test1",

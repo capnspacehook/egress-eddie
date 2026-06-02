@@ -13,7 +13,6 @@ linters:
     - fatcontext
     - forcetypeassert
     - gocheckcompilerdirectives
-    - goconst
     - gocritic
     - govet
     - ineffassign

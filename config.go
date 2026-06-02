@@ -16,6 +16,8 @@ import (
 
 const selfFilterName = "self-filter"
 
+var arpaDomains = []string{"in-addr.arpa", "ip6.arpa"}
+
 type queue struct {
 	IPv4 uint16
 	IPv6 uint16
@@ -323,10 +325,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 
 		if preformReverseLookups {
-			selfFilter.AllowedDomains = []string{
-				"in-addr.arpa",
-				"ip6.arpa",
-			}
+			selfFilter.AllowedDomains = arpaDomains
 		}
 		if len(allCachedDomains) > 0 {
 			selfFilter.AllowedDomains = append(selfFilter.AllowedDomains, allCachedDomains...)
