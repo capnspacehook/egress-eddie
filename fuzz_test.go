@@ -56,7 +56,6 @@ func FuzzFiltering(f *testing.F) {
 		if err != nil {
 			t.SkipNow()
 		}
-		debugLog(logger, "config:\n%s", string(cb))
 
 		initMockEnforcers()
 		config.enforcerCreator = newMockEnforcer

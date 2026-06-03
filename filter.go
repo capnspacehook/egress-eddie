@@ -512,8 +512,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
 			// drop DNS replies, they shouldn't be going to this filter
-			if dns.QR || dns.ANCount > 0 || dns.NSCount > 0 || dns.ARCount > 0 ||
-				len(dns.Answers) > 0 || len(dns.Authorities) > 0 || len(dns.Additionals) > 0 {
+			if dns.QR || dns.ANCount > 0 || dns.NSCount > 0 || len(dns.Answers) > 0 || len(dns.Authorities) > 0 {
 				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
 				return dropVerdict
 			}
@@ -582,21 +581,20 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 3", len(decoded))
 	}
 
-	// ensure that the fields match the amount of records
+	// messages without a question are valid but rare, and we can't
+	// filter them like normal so just drop them
 	if parsedDNS.QDCount == 0 || int(parsedDNS.QDCount) != len(parsedDNS.Questions) {
 		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid question count; qd_count=%d questions=%d", parsedDNS.QDCount, len(parsedDNS.Questions))
 	}
-	if int(parsedDNS.ANCount) != len(parsedDNS.Answers) || (parsedDNS.QR && (int(parsedDNS.ANCount) == 0 || len(parsedDNS.Answers) == 0)) ||
-		(!parsedDNS.QR && (int(parsedDNS.ANCount) != 0 || len(parsedDNS.Answers) != 0)) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid answer count; qr=%t an_count=%d answers=%d", parsedDNS.QR, parsedDNS.ANCount, len(parsedDNS.Answers))
+	// check that the record count matches the number of records
+	if int(parsedDNS.ANCount) != len(parsedDNS.Answers) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid answer count; an_count=%d answers=%d", parsedDNS.ANCount, len(parsedDNS.Answers))
 	}
-	if int(parsedDNS.NSCount) != len(parsedDNS.Authorities) || (parsedDNS.QR && (int(parsedDNS.NSCount) == 0 || len(parsedDNS.Authorities) == 0)) ||
-		(!parsedDNS.QR && (int(parsedDNS.NSCount) != 0 || len(parsedDNS.Authorities) != 0)) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid authority count; qr=%t ns_count=%d authorities=%d", parsedDNS.QR, parsedDNS.NSCount, len(parsedDNS.Authorities))
+	if int(parsedDNS.NSCount) != len(parsedDNS.Authorities) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid authority count; ns_count=%d authorities=%d", parsedDNS.NSCount, len(parsedDNS.Authorities))
 	}
-	if int(parsedDNS.ARCount) != len(parsedDNS.Additionals) || (parsedDNS.QR && (int(parsedDNS.ARCount) == 0 || len(parsedDNS.Additionals) == 0)) ||
-		(!parsedDNS.QR && (int(parsedDNS.ARCount) != 0 || len(parsedDNS.Additionals) != 0)) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid additional count; qr=%t ar_count=%d additionals=%d", parsedDNS.QR, parsedDNS.ARCount, len(parsedDNS.Additionals))
+	if int(parsedDNS.ARCount) != len(parsedDNS.Additionals) {
+		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid additional count; ar_count=%d additionals=%d", parsedDNS.ARCount, len(parsedDNS.Additionals))
 	}
 
 	// build connection ID so dns requests/responses can be correlated
