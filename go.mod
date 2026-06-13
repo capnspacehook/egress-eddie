@@ -12,6 +12,7 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/sys v0.41.0
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
+	pgregory.net/rapid v1.3.0
 )
 
 // Test dependencies
@@ -19,14 +20,11 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/matryer/is v1.4.1
 	go.uber.org/goleak v1.3.0
-	hegel.dev/go/hegel v0.5.3
 )
 
 require (
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
-	github.com/x448/float16 v0.8.4 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.50.0 // indirect
