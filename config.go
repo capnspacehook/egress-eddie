@@ -16,8 +16,6 @@ import (
 
 const selfFilterName = "self-filter"
 
-var arpaDomains = []string{"in-addr.arpa", "ip6.arpa"}
-
 type queue struct {
 	IPv4 uint16
 	IPv6 uint16
@@ -67,15 +65,14 @@ type Config struct {
 }
 
 type FilterOptions struct {
-	Name             string
-	DNSQueue         queue
-	TrafficQueue     queue
-	AllowAllDomains  bool
-	LookupUnknownIPs bool
-	AllowAnswersFor  time.Duration
-	ReCacheEvery     time.Duration
-	AllowedDomains   []string
-	CachedDomains    []string
+	Name            string
+	DNSQueue        queue
+	TrafficQueue    queue
+	AllowAllDomains bool
+	AllowAnswersFor time.Duration
+	ReCacheEvery    time.Duration
+	AllowedDomains  []string
+	CachedDomains   []string
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -121,11 +118,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	ipv6Used := config.InboundDNSQueue.IPv6 != 0
 
 	var (
-		preformReverseLookups bool
-		allCachedDomains      []string
-
-		filterNames  = make(map[string]int)
-		filterQueues = make(map[uint16]string)
+		allCachedDomains []string
+		filterNames      = make(map[string]int)
+		filterQueues     = make(map[uint16]string)
 	)
 
 	for i, filterOpt := range config.Filters {
@@ -133,7 +128,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
 		}
 
-		if !filterOpt.DNSQueue.eitherSet() && len(filterOpt.CachedDomains) == 0 && !filterOpt.LookupUnknownIPs {
+		if !filterOpt.DNSQueue.eitherSet() && len(filterOpt.CachedDomains) == 0 {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must be set`, filterOpt.Name)
 		}
 		if !filterOpt.DNSQueue.valid() {
@@ -151,8 +146,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if !ipv6Used && filterOpt.DNSQueue.bothSet() {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`, filterOpt.Name)
 		}
-		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedDomains) == 0 && (len(filterOpt.CachedDomains) > 0 || filterOpt.LookupUnknownIPs) {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and either "cachedHostames" is not empty or "lookupUnknownIPs" is true`, filterOpt.Name)
+		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedDomains) == 0 && len(filterOpt.CachedDomains) > 0 {
+			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedHostames" is not empty`, filterOpt.Name)
 		}
 		if queuesShared(config.InboundDNSQueue, filterOpt.DNSQueue) {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
@@ -187,7 +182,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
-		if len(filterOpt.AllowedDomains) == 0 && !filterOpt.AllowAllDomains && len(filterOpt.CachedDomains) == 0 && !filterOpt.LookupUnknownIPs {
+		if len(filterOpt.AllowedDomains) == 0 && !filterOpt.AllowAllDomains && len(filterOpt.CachedDomains) == 0 {
 			return nil, fmt.Errorf(`filter %q: "allowedDomains" must not be empty`, filterOpt.Name)
 		}
 		if len(filterOpt.AllowedDomains) > 0 && filterOpt.AllowAllDomains {
@@ -260,9 +255,6 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			}
 		}
 
-		if filterOpt.LookupUnknownIPs {
-			preformReverseLookups = true
-		}
 		if len(filterOpt.CachedDomains) > 0 {
 			allCachedDomains = append(allCachedDomains, filterOpt.CachedDomains...)
 		}
@@ -282,11 +274,11 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		}
 	}
 
-	if !config.SelfDNSQueue.eitherSet() && (preformReverseLookups || len(allCachedDomains) > 0) {
-		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedDomains" is not empty`)
+	if !config.SelfDNSQueue.eitherSet() && len(allCachedDomains) > 0 {
+		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter has a non-empty "cachedDomains"`)
 	}
-	if config.SelfDNSQueue.eitherSet() && !preformReverseLookups && len(allCachedDomains) == 0 {
-		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter either sets "lookupUnknownIPs" to true or "cachedDomains" is not empty`)
+	if config.SelfDNSQueue.eitherSet() && len(allCachedDomains) == 0 {
+		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter has a non-empty "cachedDomains"`)
 	}
 	if !config.SelfDNSQueue.valid() {
 		return nil, errors.New(`"selfDNSQueue.ipv4" and "selfDNSQueue.ipv6" cannot be the same`)
@@ -324,9 +316,6 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			DNSQueue: config.SelfDNSQueue,
 		}
 
-		if preformReverseLookups {
-			selfFilter.AllowedDomains = arpaDomains
-		}
 		if len(allCachedDomains) > 0 {
 			selfFilter.AllowedDomains = append(selfFilter.AllowedDomains, allCachedDomains...)
 		}

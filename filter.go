@@ -263,7 +263,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		f.allowedIPs = timedcache.New[netip.Addr](f.logger, false)
 		f.additionalDomains = timedcache.New[string](filterLogger, false)
 
-		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, newGenericCallback(ctx, &f))
+		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, newGenericCallback(&f))
 		if err != nil {
 			return nil, fmt.Errorf("error starting traffic nfqueues: %w", err)
 		}
@@ -827,7 +827,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 	}
 }
 
-func newGenericCallback(ctx context.Context, f *filter) hookCreator {
+func newGenericCallback(f *filter) hookCreator {
 	createCallback := func(logger *zap.Logger, ipv6 bool) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
@@ -903,22 +903,13 @@ func newGenericCallback(ctx context.Context, f *filter) hookCreator {
 			}
 
 			// validate that either the source or destination IP is allowed
-			var v verdict
-			allowed, err := f.validateIPs(ctx, logger, src, dst)
-			if err != nil {
-				logger.Error("error validating IPs", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst), zap.Error(err))
-				v = dropVerdict
-			} else {
-				if allowed {
-					logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
-					v = acceptVerdict
-				} else {
-					logger.Info("dropping packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
-					v = dropVerdict
-				}
+			if f.validateIPs(src, dst) {
+				logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
+				return acceptVerdict
 			}
 
-			return v
+			logger.Info("dropping packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
+			return dropVerdict
 		}
 	}
 
@@ -931,70 +922,10 @@ func newGenericCallback(ctx context.Context, f *filter) hookCreator {
 	}
 }
 
-func (f *filter) validateIPs(ctx context.Context, logger *zap.Logger, src, dst netip.Addr) (bool, error) {
+func (f *filter) validateIPs(src, dst netip.Addr) bool {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
-	if f.allowedIPs.EntryExists(dst) {
-		return true, nil
-	}
-
-	// check if source IP is allowed; if reverse IP lookups are
-	// disabled or the IP is allowed return early
-	allowed := f.allowedIPs.EntryExists(src)
-	if !f.opts.LookupUnknownIPs || allowed {
-		return allowed, nil
-	}
-
-	// preform reverse IP lookups on the destination and then source
-	// IPs only if the IPs are not private
-	if !dst.IsPrivate() {
-		allowed, err := f.lookupAndValidateIP(ctx, logger, dst)
-		if err != nil {
-			return false, err
-		}
-		if allowed {
-			return true, nil
-		}
-	}
-
-	if !src.IsPrivate() {
-		return f.lookupAndValidateIP(ctx, logger, src)
-	}
-
-	return false, nil
-}
-
-func (f *filter) lookupAndValidateIP(ctx context.Context, logger *zap.Logger, ip netip.Addr) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, dnsQueryTimeout)
-	defer cancel()
-
-	logger.Info("preforming reverse IP lookup", zap.Stringer("ip", ip))
-	names, err := f.res.LookupAddr(ctx, ip.String())
-	if err != nil {
-		// don't return error if IP simply couldn't be found
-		var dnsErr *net.DNSError
-		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
-			return false, nil
-		}
-		return false, err
-	}
-
-	ttl := f.opts.AllowAnswersFor
-	for i := range names {
-		// remove trailing dot if necessary before searching through
-		// allowed domains
-		if names[i][len(names[i])-1] == '.' {
-			names[i] = names[i][:len(names[i])-1]
-		}
-
-		if f.domainAllowed(names[i]) {
-			logger.Info("allowing IP after reverse lookup", zap.Stringer("ip", ip))
-			f.allowedIPs.AddEntry(ip, ttl)
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return f.allowedIPs.EntryExists(dst) || f.allowedIPs.EntryExists(src)
 }
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {
