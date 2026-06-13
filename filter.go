@@ -112,20 +112,13 @@ func (s *signaler) shouldAbort() <-chan struct{} {
 // connectionID is used to correlate DNS requests and responses from
 // the same connection
 type connectionID struct {
-	isUDP bool
-	src   netip.AddrPort
-	dst   netip.AddrPort
+	src netip.AddrPort
+	dst netip.AddrPort
 }
 
 func (c connectionID) String() string {
 	var b strings.Builder
 
-	if c.isUDP {
-		b.WriteString("udp")
-	} else {
-		b.WriteString("tcp")
-	}
-	b.WriteRune('|')
 	b.WriteString(c.src.String())
 	b.WriteRune('-')
 	b.WriteString(c.dst.String())
@@ -511,6 +504,10 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
+			if dns.OpCode != layers.DNSOpCodeQuery {
+				logger.Warn("dropping DNS response with non-query opcode", dnsFields(dns, f.fullDNSLogging)...)
+				return dropVerdict
+			}
 			// drop DNS replies, they shouldn't be going to this filter
 			if dns.QR || dns.ANCount > 0 || dns.NSCount > 0 || len(dns.Answers) > 0 || len(dns.Authorities) > 0 {
 				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
@@ -561,7 +558,6 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		ip4       layers.IPv4
 		ip6       layers.IPv6
 		udp       layers.UDP
-		tcp       layers.TCP
 		parsedDNS layers.DNS
 		parser    *gopacket.DecodingLayerParser
 		decoded   = make([]gopacket.LayerType, 0, 3)
@@ -569,9 +565,9 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 
 	// parse DNS packet
 	if !ipv6 {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp, &tcp, &parsedDNS)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp, &parsedDNS)
 	} else {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp, &tcp, &parsedDNS)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp, &parsedDNS)
 	}
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
@@ -599,7 +595,6 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 
 	// build connection ID so dns requests/responses can be correlated
 	var (
-		isUDP            bool
 		src, dst         netip.Addr
 		srcPort, dstPort uint16
 		srcOK, dstOK     bool
@@ -619,19 +614,14 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		return nil, connectionID{}, errors.New("error converting IPs")
 	}
 
-	if decoded[1] == layers.LayerTypeUDP {
-		isUDP = true
-		srcPort = uint16(udp.SrcPort)
-		dstPort = uint16(udp.DstPort)
-	} else {
-		isUDP = false
-		srcPort = uint16(tcp.SrcPort)
-		dstPort = uint16(tcp.DstPort)
+	if decoded[1] != layers.LayerTypeUDP {
+		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])
 	}
 
-	connID := connectionID{
-		isUDP: isUDP,
-	}
+	srcPort = uint16(udp.SrcPort)
+	dstPort = uint16(udp.DstPort)
+
+	connID := connectionID{}
 	if inbound {
 		connID.src = netip.AddrPortFrom(dst, dstPort)
 		connID.dst = netip.AddrPortFrom(src, srcPort)
