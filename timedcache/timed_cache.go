@@ -86,7 +86,7 @@ func (t *TimedCache[T]) expireEntry(entry T, gen uint64) {
 		return
 	}
 
-	t.logger.Debug("deleting entry", zap.Any("entry", entry))
+	t.logger.Debug("deleting expired entry", zap.Any("entry", entry))
 	delete(t.cache, entry)
 }
 
@@ -97,6 +97,18 @@ func (t *TimedCache[T]) EntryExists(entry T) bool {
 	_, ok := t.cache[entry]
 
 	return ok
+}
+
+func (t *TimedCache[T]) entryCount(entry T) int {
+	t.mtx.RLock()
+	defer t.mtx.RUnlock()
+
+	ct, ok := t.cache[entry]
+	if !ok {
+		return -1
+	}
+
+	return ct.count
 }
 
 func (t *TimedCache[T]) RemoveEntry(entry T) {
