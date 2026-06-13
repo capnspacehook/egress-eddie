@@ -3,14 +3,14 @@ package egresseddie
 import (
 	"strings"
 
-	"github.com/google/gopacket/layers"
+	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 // dnsFields returns a list of fields for a zap logger that describes
 // a DNS packet.
-func dnsFields(dns *layers.DNS, fullDNSLogging bool) []zap.Field {
+func dnsFields(dnsMsg *dns.Msg, fullDNSLogging bool) []zap.Field {
 	var (
 		fields []zap.Field
 		flags  []string
@@ -18,68 +18,57 @@ func dnsFields(dns *layers.DNS, fullDNSLogging bool) []zap.Field {
 
 	if fullDNSLogging {
 		fields = append(fields,
-			zap.Uint16("id", dns.ID),
-			zap.Bool("qr", dns.QR),
-			zap.Uint8("opcode", uint8(dns.OpCode)),
+			zap.Uint16("id", dnsMsg.Id),
+			zap.Bool("qr", dnsMsg.Response),
+			zap.Uint8("opcode", uint8(dnsMsg.Opcode)),
 		)
-		if dns.AA {
+		if dnsMsg.Authoritative {
 			flags = append(flags, "aa")
 		}
-		if dns.TC {
+		if dnsMsg.Truncated {
 			flags = append(flags, "tc")
 		}
-		if dns.RD {
+		if dnsMsg.RecursionDesired {
 			flags = append(flags, "rd")
 		}
-		if dns.RA {
+		if dnsMsg.RecursionAvailable {
 			flags = append(flags, "ra")
 		}
 		fields = append(fields, zap.Strings("flags", flags))
 
-		if dns.QR {
-			fields = append(fields, zap.Uint8("resp-code", uint8(dns.ResponseCode)))
-		}
-
-		if dns.QDCount > 0 {
-			fields = append(fields, zap.Uint16("qd_count", dns.QDCount))
-		}
-		if dns.ANCount > 0 {
-			fields = append(fields, zap.Uint16("an_count", dns.ANCount))
-		}
-		if dns.NSCount > 0 {
-			fields = append(fields, zap.Uint16("ns_count", dns.NSCount))
-		}
-		if dns.ARCount > 0 {
-			fields = append(fields, zap.Uint16("ar_count", dns.ARCount))
+		if dnsMsg.Response {
+			fields = append(fields, zap.Uint8("resp-code", uint8(dnsMsg.Rcode)))
 		}
 	}
 
-	if len(dns.Questions) > 0 {
-		fields = append(fields, zap.Array("questions", dnsQuestions(dns.Questions)))
+	if len(dnsMsg.Question) > 0 {
+		fields = append(fields, zap.Array("questions", dnsQuestions(dnsMsg.Question)))
 	}
 
-	stringify := func(records []layers.DNSResourceRecord, key string) {
+	stringify := func(records []dns.RR, key string) {
 		if len(records) == 0 {
 			return
 		}
 		// skip additionals containing empty OPTs
-		if len(records) == 1 && records[0].Type == layers.DNSTypeOPT && len(records[0].OPT) == 0 {
-			return
+		if len(records) == 1 {
+			if opt, ok := records[0].(*dns.OPT); ok && len(opt.Option) == 0 {
+				return
+			}
 		}
 
 		fields = append(fields, zap.Array(key, dnsRecords(records)))
 	}
 
-	stringify(dns.Answers, "answers")
+	stringify(dnsMsg.Answer, "answers")
 	if fullDNSLogging {
-		stringify(dns.Authorities, "authorities")
-		stringify(dns.Additionals, "additionals")
+		stringify(dnsMsg.Ns, "authorities")
+		stringify(dnsMsg.Extra, "additionals")
 	}
 
 	return fields
 }
 
-type dnsQuestions []layers.DNSQuestion
+type dnsQuestions []dns.Question
 
 func (q dnsQuestions) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range q {
@@ -91,20 +80,20 @@ func (q dnsQuestions) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-type dnsQuestion layers.DNSQuestion
+type dnsQuestion dns.Question
 
 func (q dnsQuestion) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddByteString("name", q.Name)
-	enc.AddString("class", strings.ToLower(q.Class.String()))
-	enc.AddString("type", strings.ToLower(q.Type.String()))
+	enc.AddString("name", q.Name)
+	enc.AddString("class", strings.ToLower(dns.Class(q.Qclass).String()))
+	enc.AddString("type", strings.ToLower(dns.Type(q.Qtype).String()))
 	return nil
 }
 
-type dnsRecords []layers.DNSResourceRecord
+type dnsRecords []dns.RR
 
 func (r dnsRecords) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range r {
-		if err := enc.AppendObject(dnsRecord(r[i])); err != nil {
+		if err := enc.AppendObject(dnsRecord{r[i]}); err != nil {
 			return err
 		}
 	}
@@ -112,60 +101,66 @@ func (r dnsRecords) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-type dnsRecord layers.DNSResourceRecord
+// dnsRecord wraps the dns.RR interface so a log-marshaling method can be
+// defined on it.
+type dnsRecord struct {
+	dns.RR
+}
 
 func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	switch r.Type {
-	case layers.DNSTypeA, layers.DNSTypeAAAA:
-		enc.AddString("ip", r.IP.String())
-	case layers.DNSTypeCNAME:
-		enc.AddByteString("name", r.CNAME)
-	case layers.DNSTypeNS:
-		enc.AddByteString("name", r.NS)
-	case layers.DNSTypeMX:
-		enc.AddUint16("pref", r.MX.Preference)
-		enc.AddByteString("name", r.MX.Name)
-	case layers.DNSTypeOPT:
-		err := enc.AddArray("opts", dnsOpts(r.OPT))
+	switch rr := r.RR.(type) {
+	case *dns.A:
+		enc.AddString("ip", rr.A.String())
+	case *dns.AAAA:
+		enc.AddString("ip", rr.AAAA.String())
+	case *dns.CNAME:
+		enc.AddString("name", rr.Target)
+	case *dns.NS:
+		enc.AddString("name", rr.Ns)
+	case *dns.MX:
+		enc.AddUint16("pref", rr.Preference)
+		enc.AddString("name", rr.Mx)
+	case *dns.OPT:
+		err := enc.AddArray("opts", dnsOpts(rr.Option))
 		if err != nil {
 			return err
 		}
-	case layers.DNSTypePTR:
-		enc.AddByteString("name", r.PTR)
-	case layers.DNSTypeSOA:
-		enc.AddByteString("mname", r.SOA.MName)
-		enc.AddByteString("rname", r.SOA.RName)
-		enc.AddUint32("serial", r.SOA.Serial)
-		enc.AddUint32("refresh", r.SOA.Refresh)
-		enc.AddUint32("retry", r.SOA.Retry)
-		enc.AddUint32("expire", r.SOA.Expire)
-		enc.AddUint32("min", r.SOA.Minimum)
-	case layers.DNSTypeSRV:
-		enc.AddUint16("priority", r.SRV.Priority)
-		enc.AddUint16("weight", r.SRV.Weight)
-		enc.AddUint16("port", r.SRV.Port)
-		enc.AddByteString("name", r.SRV.Name)
-	case layers.DNSTypeTXT:
-		err := enc.AddArray("data", dnsTXTs(r.TXTs))
+	case *dns.PTR:
+		enc.AddString("name", rr.Ptr)
+	case *dns.SOA:
+		enc.AddString("mname", rr.Ns)
+		enc.AddString("rname", rr.Mbox)
+		enc.AddUint32("serial", rr.Serial)
+		enc.AddUint32("refresh", rr.Refresh)
+		enc.AddUint32("retry", rr.Retry)
+		enc.AddUint32("expire", rr.Expire)
+		enc.AddUint32("min", rr.Minttl)
+	case *dns.SRV:
+		enc.AddUint16("priority", rr.Priority)
+		enc.AddUint16("weight", rr.Weight)
+		enc.AddUint16("port", rr.Port)
+		enc.AddString("name", rr.Target)
+	case *dns.TXT:
+		err := enc.AddArray("data", dnsTXTs(rr.Txt))
 		if err != nil {
 			return err
 		}
-	case layers.DNSTypeURI:
-		enc.AddUint16("priority", r.URI.Priority)
-		enc.AddUint16("weight", r.URI.Weight)
-		enc.AddByteString("name", r.URI.Target)
+	case *dns.URI:
+		enc.AddUint16("priority", rr.Priority)
+		enc.AddUint16("weight", rr.Weight)
+		enc.AddString("name", rr.Target)
 	}
 
-	enc.AddString("type", strings.ToLower(r.Type.String()))
+	enc.AddString("type", strings.ToLower(dns.Type(r.Header().Rrtype).String()))
 
 	return nil
 }
 
-type dnsOpts []layers.DNSOPT
+type dnsOpts []dns.EDNS0
 
 func (o dnsOpts) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range o {
-		if err := enc.AppendObject(dnsOpt(o[i])); err != nil {
+		if err := enc.AppendObject(dnsOpt{o[i]}); err != nil {
 			return err
 		}
 	}
@@ -173,20 +168,25 @@ func (o dnsOpts) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-type dnsOpt layers.DNSOPT
+// dnsOpt wraps the dns.EDNS0 interface so a log-marshaling method can be
+// defined on it. EDNS0 exposes no uniform data accessor, so we log the
+// option code and its string representation.
+type dnsOpt struct {
+	dns.EDNS0
+}
 
 func (o dnsOpt) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddString("code", o.Code.String())
-	enc.AddBinary("data", o.Data)
+	enc.AddUint16("code", o.Option())
+	enc.AddString("data", o.String())
 
 	return nil
 }
 
-type dnsTXTs [][]byte
+type dnsTXTs []string
 
 func (t dnsTXTs) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range t {
-		enc.AppendByteString(t[i])
+		enc.AppendString(t[i])
 	}
 
 	return nil

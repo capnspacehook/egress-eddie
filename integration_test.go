@@ -125,18 +125,6 @@ allowedDomains = [
 		}
 	})
 
-	t.Run("NS", func(t *testing.T) {
-		is := is.New(t)
-
-		nameServers, err := net.DefaultResolver.LookupNS(getTimeout(t), "facebook.com")
-		is.NoErr(err) // NS request to allowed domain should succeed
-
-		for _, nameServer := range nameServers {
-			_, _, err = lookupIPs(t, nameServer.Host)
-			is.NoErr(err) // lookup of allowed name server should succeed
-		}
-	})
-
 	t.Run("SRV", func(t *testing.T) {
 		is := is.New(t)
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -186,6 +187,13 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, full
 	f.dnsRespNF6 = nf6
 
 	for i := range config.Filters {
+		// fully qualify all domains in the config, github.com/miekg/dns
+		// will ensure question and answer names are fully qualified, so
+		// it's less work to do it here once instead of trimming every
+		// question and answer name
+		fullyQualifyDomains(config.Filters[i].AllowedDomains)
+		fullyQualifyDomains(config.Filters[i].CachedDomains)
+
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
 		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, f.fullDNSLogging, newEnforcer, res)
 		if err != nil {
@@ -197,6 +205,12 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, full
 	}
 
 	return &f, nil
+}
+
+func fullyQualifyDomains(domains []string) {
+	for i := range domains {
+		domains[i] = dns.Fqdn(domains[i])
+	}
 }
 
 // Start starts packet filtering.
@@ -494,34 +508,34 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
+			dnsMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
 			if err != nil {
 				logger.Error("error parsing DNS packet", zap.Error(err))
-				if dns != nil {
-					logger.Info("offending DNS packet", dnsFields(dns, f.fullDNSLogging)...)
+				if dnsMsg != nil {
+					logger.Info("offending DNS packet", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				}
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
-			if dns.OpCode != layers.DNSOpCodeQuery {
-				logger.Warn("dropping DNS response with non-query opcode", dnsFields(dns, f.fullDNSLogging)...)
+			if dnsMsg.Opcode != dns.OpcodeQuery {
+				logger.Warn("dropping DNS response with non-query opcode", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 			// drop DNS replies, they shouldn't be going to this filter
-			if dns.QR || dns.ANCount > 0 || dns.NSCount > 0 || len(dns.Answers) > 0 || len(dns.Authorities) > 0 {
-				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dns, f.fullDNSLogging)...)
+			if dnsMsg.Response || len(dnsMsg.Answer) > 0 || len(dnsMsg.Ns) > 0 {
+				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
-			if !f.opts.AllowAllDomains && !f.validateDNSQuestions(dns) {
-				logger.Warn("dropping DNS request", dnsFields(dns, f.fullDNSLogging)...)
+			if !f.opts.AllowAllDomains && !f.validateDNSQuestions(dnsMsg) {
+				logger.Warn("dropping DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
-			logger.Info("allowing DNS request", dnsFields(dns, f.fullDNSLogging)...)
+			logger.Info("allowing DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
 
 			logger.Debug("adding connection")
 			f.connections.AddEntry(connID, dnsQueryTimeout)
@@ -553,44 +567,36 @@ func setVerdict(logger *zap.Logger, e enforcer, attr nfqueue.Attribute, v verdic
 	}
 }
 
-func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionID, error) {
+func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, error) {
 	var (
-		ip4       layers.IPv4
-		ip6       layers.IPv6
-		udp       layers.UDP
-		parsedDNS layers.DNS
-		parser    *gopacket.DecodingLayerParser
-		decoded   = make([]gopacket.LayerType, 0, 3)
+		ip4     layers.IPv4
+		ip6     layers.IPv6
+		udp     layers.UDP
+		dnsMsg  dns.Msg
+		parser  *gopacket.DecodingLayerParser
+		decoded = make([]gopacket.LayerType, 0, 3)
 	)
 
 	// parse DNS packet
 	if !ipv6 {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp, &parsedDNS)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp)
 	} else {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp, &parsedDNS)
+		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp)
 	}
+	parser.IgnoreUnsupported = true
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
-		return nil, connectionID{}, err
+		return nil, connectionID{}, fmt.Errorf("decoding packet: %w", err)
 	}
-	if len(decoded) != 3 {
+	if len(decoded) != 2 {
 		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 3", len(decoded))
 	}
+	if decoded[1] != layers.LayerTypeUDP {
+		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])
+	}
 
-	// messages without a question are valid but rare, and we can't
-	// filter them like normal so just drop them
-	if parsedDNS.QDCount == 0 || int(parsedDNS.QDCount) != len(parsedDNS.Questions) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid question count; qd_count=%d questions=%d", parsedDNS.QDCount, len(parsedDNS.Questions))
-	}
-	// check that the record count matches the number of records
-	if int(parsedDNS.ANCount) != len(parsedDNS.Answers) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid answer count; an_count=%d answers=%d", parsedDNS.ANCount, len(parsedDNS.Answers))
-	}
-	if int(parsedDNS.NSCount) != len(parsedDNS.Authorities) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid authority count; ns_count=%d authorities=%d", parsedDNS.NSCount, len(parsedDNS.Authorities))
-	}
-	if int(parsedDNS.ARCount) != len(parsedDNS.Additionals) {
-		return &parsedDNS, connectionID{}, fmt.Errorf("dropping DNS response with invalid additional count; ar_count=%d additionals=%d", parsedDNS.ARCount, len(parsedDNS.Additionals))
+	if err := dnsMsg.Unpack(udp.Payload); err != nil {
+		return nil, connectionID{}, fmt.Errorf("decoding DNS message: %w", err)
 	}
 
 	// build connection ID so dns requests/responses can be correlated
@@ -614,10 +620,6 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		return nil, connectionID{}, errors.New("error converting IPs")
 	}
 
-	if decoded[1] != layers.LayerTypeUDP {
-		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])
-	}
-
 	srcPort = uint16(udp.SrcPort)
 	dstPort = uint16(udp.DstPort)
 
@@ -630,22 +632,21 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*layers.DNS, connectionI
 		connID.dst = netip.AddrPortFrom(dst, dstPort)
 	}
 
-	return &parsedDNS, connID, nil
+	return &dnsMsg, connID, nil
 }
 
-func (f *filter) validateDNSQuestions(dns *layers.DNS) bool {
-	if dns.QDCount == 0 {
+func (f *filter) validateDNSQuestions(dnsMsg *dns.Msg) bool {
+	if len(dnsMsg.Question) == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
 		return false
 	}
 
-	for i := range dns.Questions {
+	for i := range dnsMsg.Question {
 		// bail out if any of the questions don't contain an allowed
 		// domain
-		qName := string(dns.Questions[i].Name)
-		if !f.domainAllowed(qName) {
+		if !f.domainAllowed(dnsMsg.Question[i].Name) {
 			return false
 		}
 	}
@@ -712,11 +713,11 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return dropVerdict
 			}
 
-			dns, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
+			dnsMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 			if err != nil {
 				logger.Error("error parsing DNS packet", zap.Error(err))
-				if dns != nil {
-					logger.Info("offending DNS packet", dnsFields(dns, f.fullDNSLogging)...)
+				if dnsMsg != nil {
+					logger.Info("offending DNS packet", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				}
 				return dropVerdict
 			}
@@ -730,7 +731,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				}
 			}
 			if connFilter == nil {
-				logger.Warn("dropping DNS response from unknown connection", dnsFields(dns, f.fullDNSLogging)...)
+				logger.Warn("dropping DNS response from unknown connection", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 			logger.Debug("removing connection")
@@ -739,70 +740,82 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			logger = logger.With(zap.String("dns-req.filter.name", connFilter.opts.Name))
 			// allow and don't process the DNS response if all domains
 			// are allowed
-			if !connFilter.opts.AllowAllDomains {
-				// validate DNS response questions are for allowed
-				// domains, drop them otherwise; responses for disallowed
-				// domains should never happen in theory, because we
-				// block requests for disallowed domains but it doesn't
-				// hurt to check
-				if !connFilter.validateDNSQuestions(dns) {
-					logger.Info("dropping DNS reply", dnsFields(dns, f.fullDNSLogging)...)
+			if connFilter.opts.AllowAllDomains {
+				logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				return acceptVerdict
+			}
+
+			// validate DNS response questions are for allowed
+			// domains, drop them otherwise; responses for disallowed
+			// domains should never happen in theory, because we
+			// block requests for disallowed domains but it doesn't
+			// hurt to check
+			if !connFilter.validateDNSQuestions(dnsMsg) {
+				logger.Info("dropping DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				return dropVerdict
+			}
+
+			// allow DNS response if the filter it came from is the self
+			// filter or if there are no answers
+			if connFilter.isSelfFilter || len(dnsMsg.Answer) == 0 {
+				logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				return acceptVerdict
+			}
+
+			ttl := connFilter.opts.AllowAnswersFor
+			for _, a := range dnsMsg.Answer {
+				aName := string(a.Header().Name)
+				if !connFilter.domainAllowed(aName) {
+					logger.Info("dropping DNS reply", zap.String("answer", aName))
 					return dropVerdict
 				}
 
-				// don't process the DNS response if the filter it came
-				// from is the self filter
-				if !connFilter.isSelfFilter && dns.ANCount > 0 {
-					ttl := connFilter.opts.AllowAnswersFor
-					for _, answer := range dns.Answers {
-						aName := string(answer.Name)
-						if !connFilter.domainAllowed(aName) {
-							logger.Info("dropping DNS reply", zap.ByteString("answer", answer.Name))
-							return dropVerdict
-						}
-
-						switch answer.Type {
-						case layers.DNSTypeA, layers.DNSTypeAAAA:
-							// temporarily add A and AAAA answers to allowed IP list
-							ip, ok := netip.AddrFromSlice(answer.IP)
-							if !ok {
-								logger.Error("error converting IP", zap.Stringer("answer.ip", answer.IP))
-								continue
-							}
-
-							connFilter.allowedIPs.AddEntry(ip, ttl)
-							// If the IP address is an IPv4-mapped IPv6 address,
-							// add the unwrapped IPv4 address too. That is what
-							// will most likely be used.
-							if ip.Is4In6() {
-								connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
-							}
-						case layers.DNSTypeCNAME, layers.DNSTypeSRV, layers.DNSTypeMX, layers.DNSTypeNS:
-							// temporarily add CNAME, SRV, MX, and NS answers to allowed
-							// domains list
-							var name []byte
-							switch answer.Type {
-							case layers.DNSTypeCNAME:
-								name = answer.CNAME
-							case layers.DNSTypeSRV:
-								name = answer.SRV.Name
-							case layers.DNSTypeMX:
-								name = answer.MX.Name
-							case layers.DNSTypeNS:
-								name = answer.NS
-							}
-
-							connFilter.additionalDomains.AddEntry(string(name), ttl)
-						default:
-							// don't need to specifically handle other answer
-							// types, the packet will be allowed so whoever
-							// made the DNS request will see this answer
-						}
+				switch answer := a.(type) {
+				case *dns.A:
+					// temporarily add A answers to allowed IP list
+					ip, ok := netip.AddrFromSlice(answer.A)
+					if !ok {
+						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
+						continue
 					}
+					connFilter.allowedIPs.AddEntry(ip, ttl)
+				case *dns.AAAA:
+					// temporarily add A answers to allowed IP list
+					ip, ok := netip.AddrFromSlice(answer.AAAA)
+					if !ok {
+						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
+						continue
+					}
+					connFilter.allowedIPs.AddEntry(ip, ttl)
+
+					// If the IP address is an IPv4-mapped IPv6 address,
+					// add the unwrapped IPv4 address too. That is what
+					// will most likely be used.
+					if ip.Is4In6() {
+						connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
+					}
+				case *dns.CNAME:
+					// temporarily add CNAME answers to allowed domain list
+					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+				case *dns.SRV:
+					// temporarily add SRV answers to allowed domain list
+					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+				case *dns.MX:
+					// temporarily add MX answers to allowed domain list
+					connFilter.additionalDomains.AddEntry(string(answer.Mx), ttl)
+				default:
+					// drop all other answer types
+					typeName, ok := dns.TypeToString[answer.Header().Rrtype]
+					if !ok {
+						typeName = "unknown-" + strconv.Itoa(int(answer.Header().Rrtype))
+					}
+
+					logger.Info("dropping DNS reply with disallowed type", zap.String("answer", aName), zap.String("type", typeName))
+					return dropVerdict
 				}
 			}
 
-			logger.Info("allowing DNS reply", dnsFields(dns, f.fullDNSLogging)...)
+			logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
 
 			return acceptVerdict
 		}
