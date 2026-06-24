@@ -1,9 +1,12 @@
 package egresseddie
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"pgregory.net/rapid"
@@ -95,5 +98,108 @@ func testDomainAllowed(t *rapid.T) {
 	}
 	if equal && !f.domainAllowed(label) {
 		t.Fatal("label equal to allowed domain should be allowed")
+	}
+}
+
+func FuzzConnectionID(f *testing.F) {
+	f.Fuzz(rapid.MakeFuzz(testConnectionID))
+}
+
+func TestConnectionID(t *testing.T) {
+	rapid.Check(t, testConnectionID)
+}
+
+func testConnectionID(t *rapid.T) {
+	ipv6 := rapid.Bool().Draw(t, "ipv6")
+	var srcIP, dstIP netip.Addr
+	if !ipv6 {
+		srcIP = GenIPv4Addr().Draw(t, "srcIP")
+		dstIP = GenIPv4Addr().Draw(t, "dstIP")
+	} else {
+		srcIP = GenIPv6Addr().Draw(t, "srcIP")
+		dstIP = GenIPv6Addr().Draw(t, "dstIP")
+	}
+	srcPort := rapid.Uint16().Draw(t, "srcPort")
+	dstPort := rapid.Uint16().Draw(t, "dstPort")
+
+	var ipLayer gopacket.SerializableLayer
+	if !ipv6 {
+		ipv4Layer := rapid.Make[layers.IPv4]().Draw(t, "ipv4Layer")
+		ipv4Layer.Protocol = layers.IPProtocolUDP
+		ipv4Layer.SrcIP = srcIP.AsSlice()
+		ipv4Layer.DstIP = dstIP.AsSlice()
+		ipv4Layer.Payload = nil
+		ipv4Layer.Contents = nil
+		ipLayer = &ipv4Layer
+	} else {
+		ipv6Layer := rapid.Make[layers.IPv6]().Draw(t, "ipv6Layer")
+		ipv6Layer.NextHeader = layers.IPProtocolUDP
+		ipv6Layer.SrcIP = srcIP.AsSlice()
+		ipv6Layer.DstIP = dstIP.AsSlice()
+		ipv6Layer.Payload = nil
+		ipv6Layer.Contents = nil
+		ipLayer = &ipv6Layer
+	}
+
+	dnsMsg := dns.Msg{
+		Question: []dns.Question{
+			{
+				Name:   "domain.com.",
+				Qtype:  dns.TypeA,
+				Qclass: dns.ClassINET,
+			},
+		},
+	}
+	dnsBytes, err := dnsMsg.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := gopacket.Payload(dnsBytes)
+
+	udpLayer := layers.UDP{
+		SrcPort: layers.UDPPort(srcPort),
+		DstPort: layers.UDPPort(dstPort),
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{
+		FixLengths: true,
+	}
+	err = gopacket.SerializeLayers(buf, opts, ipLayer, &udpLayer, payload)
+	if err != nil {
+		t.Skip()
+	}
+
+	_, connID, err := parseDNSPacket(buf.Bytes(), ipv6, true)
+	if err != nil {
+		t.Skip()
+	}
+
+	// inverse
+	if !ipv6 {
+		ipv4Layer := ipLayer.(*layers.IPv4)
+		ipv4Layer.SrcIP = dstIP.AsSlice()
+		ipv4Layer.DstIP = srcIP.AsSlice()
+	} else {
+		ipv6Layer := ipLayer.(*layers.IPv6)
+		ipv6Layer.SrcIP = dstIP.AsSlice()
+		ipv6Layer.DstIP = srcIP.AsSlice()
+	}
+	udpLayer.SrcPort = layers.UDPPort(dstPort)
+	udpLayer.DstPort = layers.UDPPort(srcPort)
+
+	buf = gopacket.NewSerializeBuffer()
+	err = gopacket.SerializeLayers(buf, opts, ipLayer, &udpLayer, payload)
+	if err != nil {
+		t.Skip()
+	}
+
+	_, connID2, err := parseDNSPacket(buf.Bytes(), ipv6, false)
+	if err != nil {
+		t.Skip()
+	}
+
+	if connID != connID2 {
+		t.Fatal("connection IDs should be the same")
 	}
 }

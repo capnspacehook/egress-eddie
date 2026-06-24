@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/florianl/go-nfqueue"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 	"github.com/mdlayher/netlink"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
@@ -574,7 +574,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 		udp     layers.UDP
 		dnsMsg  dns.Msg
 		parser  *gopacket.DecodingLayerParser
-		decoded = make([]gopacket.LayerType, 0, 3)
+		decoded = make([]gopacket.LayerType, 0, 2)
 	)
 
 	// parse DNS packet
@@ -589,7 +589,7 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 		return nil, connectionID{}, fmt.Errorf("decoding packet: %w", err)
 	}
 	if len(decoded) != 2 {
-		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 3", len(decoded))
+		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 2", len(decoded))
 	}
 	if decoded[1] != layers.LayerTypeUDP {
 		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])

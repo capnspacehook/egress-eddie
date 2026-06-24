@@ -1,11 +1,11 @@
 module github.com/capnspacehook/egress-eddie
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/florianl/go-nfqueue v1.3.2
-	github.com/google/gopacket v1.1.19
+	github.com/gopacket/gopacket v1.6.1
 	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3
 	github.com/mdlayher/netlink v1.8.0
 	github.com/miekg/dns v1.1.72
