@@ -108,6 +108,8 @@ type dnsRecord struct {
 }
 
 func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddString("owner_name", r.RR.Header().Name)
+
 	switch rr := r.RR.(type) {
 	case *dns.A:
 		enc.AddString("ip", rr.A.String())

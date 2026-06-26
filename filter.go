@@ -529,13 +529,8 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
 			if !f.opts.AllowAllDomains {
-				ok, err := f.validateDNSQuestion(dnsMsg)
-				if err != nil {
+				if err := f.validateDNSQuestion(dnsMsg); err != nil {
 					logger.Warn("dropping DNS request", f.dropReasonFields(err, dnsMsg)...)
-					return dropVerdict
-				}
-				if !ok {
-					logger.Warn("dropping DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
 					return dropVerdict
 				}
 			}
@@ -640,41 +635,95 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 	return &dnsMsg, connID, nil
 }
 
-func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (bool, error) {
+func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
 	if len(dnsMsg.Question) == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		return false, errors.New("no questions in DNS request")
+		return errors.New("no questions in DNS request")
 	} else if len(dnsMsg.Question) > 1 {
 		// drop DNS requests with more than one question; this is
 		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
-		return false, fmt.Errorf("%d questions in DNS request", len(dnsMsg.Question))
+		return fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
 	}
 
 	q := dnsMsg.Question[0]
-	return f.validateDNSName(q.Qtype, q.Name)
+	ok, err := f.validateDNSName(q.Qtype, q.Name)
+	if err != nil {
+		return fmt.Errorf("validating domain name %q in question: %w", q.Name, err)
+	}
+	if !ok {
+		return fmt.Errorf("domain name %q in question is not allowed", q.Name)
+	}
+
+	return nil
 }
 
 // TODO: validate question matches request question
 func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 	q := dnsMsg.Question[0]
+	var allowedTargets []string
+
 	for _, a := range dnsMsg.Answer {
 		h := a.Header()
-		if ok, err := f.validateDNSName(q.Qtype, h.Name); !ok || err != nil {
-			return false, err
+
+		// if the owner name is a target from a previous allowed RR it's
+		// safe to allow it
+		if !slices.Contains(allowedTargets, strings.ToLower(h.Name)) {
+			ok, err := f.validateDNSName(q.Qtype, h.Name)
+			if err != nil {
+				return false, fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(h.Rrtype), err)
+			}
+			if !ok {
+				return false, fmt.Errorf("owner domain name %q in answer of RR type %s is not allowed", h.Name, rrTypeToString(h.Rrtype))
+			}
 		}
 
-		if !slices.Contains(allowedAnswerRRs, h.Rrtype) {
+		// ensure all target answers are allowed
+		var target string
+		switch answer := a.(type) {
+		case *dns.A:
+		case *dns.AAAA:
+		case *dns.CNAME:
+			target = answer.Target
+		case *dns.SRV:
+			target = answer.Target
+		case *dns.HTTPS:
+			target = answer.Target
+		case *dns.SVCB:
+			target = answer.Target
+		case *dns.MX:
+			target = answer.Mx
+		default:
 			typeName, ok := dns.TypeToString[h.Rrtype]
 			if !ok {
 				typeName = "unknown-" + strconv.Itoa(int(h.Rrtype))
 			}
-			return false, fmt.Errorf("disallowed RR type %s in answer section", typeName)
+			return false, fmt.Errorf("disallowed RR type %s for answer", typeName)
 		}
+		if target == "" {
+			continue
+		}
+
+		ok, err := f.targetAllowed(target)
+		if err != nil {
+			return false, fmt.Errorf("validating target %q in answer of RR type %s: %w", target, rrTypeToString(h.Rrtype), err)
+		}
+		if !ok {
+			return false, fmt.Errorf("target domain name %q in answer is not allowed", target)
+		}
+		allowedTargets = append(allowedTargets, target)
 	}
 
 	return true, nil
+}
+
+func rrTypeToString(rrType uint16) string {
+	typeName, ok := dns.TypeToString[rrType]
+	if ok {
+		return typeName
+	}
+	return "unknown-" + strconv.Itoa(int(rrType))
 }
 
 func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
@@ -685,23 +734,23 @@ func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
 	case dns.TypeSRV:
 		s, labelsStripped := stripPrefixLabels(name)
 		if labelsStripped < 2 {
-			return false, fmt.Errorf("domain name %q does not have enough prefix labels", name)
+			return false, errors.New("not enough prefix labels")
 		} else if labelsStripped > 2 {
-			return false, fmt.Errorf("domain name %q has too many prefix labels", name)
+			return false, errors.New("too many prefix labels")
 		}
 		strippedName = s
 	case dns.TypeHTTPS:
 		s, labelsStripped := stripPrefixLabels(name)
 		if labelsStripped != 0 && labelsStripped != 2 {
-			return false, fmt.Errorf("domain name %q has an unexpected number of prefix labels", name)
+			return false, errors.New("unexpected number of prefix labels")
 		}
 		strippedName = s
 	case dns.TypeSVCB:
 		s, labelsStripped := stripPrefixLabels(name)
 		if labelsStripped == 0 {
-			return false, fmt.Errorf("domain name %q does not have any prefix labels", name)
+			return false, errors.New("no prefix labels")
 		} else if labelsStripped > 2 {
-			return false, fmt.Errorf("domain name %q has too many prefix labels", name)
+			return false, errors.New("too many prefix labels")
 		}
 		strippedName = s
 	default:
@@ -751,18 +800,26 @@ func stripPrefixLabels(domain string) (string, int) {
 	return domain[idx:], numFound
 }
 
+// domainAllowed checks if a domain name from a question or an owner
+// name from an answer is allowed by the filter.
 func (f *filter) domainAllowed(domain string) (bool, error) {
+	return f.domainNameAllowed(domain, false)
+}
+
+// targetAllowed checks if a domain name from specific answer RRs that
+// specify targets is allowed by the filter.
+func (f *filter) targetAllowed(domain string) (bool, error) {
+	return f.domainNameAllowed(domain, true)
+}
+
+func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 	err := validDomainName(domain)
 	if err != nil {
 		return false, err
 	}
 
-	if domain[len(domain)-1] == '.' {
-		domain = domain[:len(domain)-1]
-	}
-	lowerDomain := strings.ToLower(domain)
-
-	f.logger.Debug("checking if domain is allowed", zap.String("domain", domain))
+	lowerDomain := prepareDomainName(domain)
+	f.logger.Debug("checking if domain is allowed", zap.String("domain", lowerDomain))
 
 	for _, matcher := range f.opts.allowedDomainMatchers {
 		if matcher.Match(lowerDomain) {
@@ -776,7 +833,27 @@ func (f *filter) domainAllowed(domain string) (bool, error) {
 		return false, nil
 	}
 
+	// if the domain name is a target, check if it's allowed by any of
+	// the allowed targets matchers or if already exists as an
+	// additional allowed domain
+	if isTarget {
+		for _, matcher := range f.opts.allowedTargetMatchers {
+			if matcher.Match(lowerDomain) {
+				return true, nil
+			}
+		}
+	}
+
 	return f.additionalDomains.EntryExists(lowerDomain), nil
+}
+
+// prepareDomainName removes a trailing dot and lowercases the domain
+// name so it can be matched case-insensitively.
+func prepareDomainName(domain string) string {
+	if domain[len(domain)-1] == '.' {
+		domain = domain[:len(domain)-1]
+	}
+	return strings.ToLower(domain)
 }
 
 func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback) nfqueue.HookFunc {
@@ -856,13 +933,8 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 
 			// validate DNS response questions are for allowed
 			// domains, drop them otherwise
-			questionsOK, err := connFilter.validateDNSQuestion(dnsMsg)
-			if err != nil {
+			if err := connFilter.validateDNSQuestion(dnsMsg); err != nil {
 				logger.Info("dropping DNS reply", connFilter.dropReasonFields(err, dnsMsg)...)
-				return dropVerdict
-			}
-			if !questionsOK {
-				logger.Info("dropping DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
@@ -887,7 +959,6 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 
 			ttl := connFilter.opts.AllowAnswersFor
 			for _, a := range dnsMsg.Answer {
-				// TODO: support HTTPS/SVCB?
 				switch answer := a.(type) {
 				case *dns.A:
 					// temporarily add A answers to allowed IP list
@@ -914,31 +985,21 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 					}
 				case *dns.CNAME:
 					// temporarily add CNAME targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
 				case *dns.SRV:
 					// temporarily add SRV targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
 				case *dns.HTTPS:
 					// temporarily add HTTPS targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
 				case *dns.SVCB:
 					// temporarily add SVCB targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
 				case *dns.MX:
 					// temporarily add MX targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(string(answer.Mx), ttl)
+					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Mx), ttl)
 				default:
-					// drop all other answer types
-					typeName, ok := dns.TypeToString[answer.Header().Rrtype]
-					if !ok {
-						typeName = "unknown-" + strconv.Itoa(int(answer.Header().Rrtype))
-					}
-
-					logger.Info(
-						"dropping DNS reply with disallowed type",
-						append([]zap.Field{zap.String("type", typeName)}, dnsFields(dnsMsg, f.fullDNSLogging)...)...,
-					)
-					return dropVerdict
+					// other answer types are rejected in (*filter).validateDNSAnswers
 				}
 			}
 

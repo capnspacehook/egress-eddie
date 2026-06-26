@@ -76,9 +76,11 @@ type FilterOptions struct {
 	AllowAnswersFor time.Duration
 	ReCacheEvery    time.Duration
 	AllowedDomains  []string
+	AllowedTargets  []string
 	CachedDomains   []string
 
 	allowedDomainMatchers []glob.Glob
+	allowedTargetMatchers []glob.Glob
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -220,8 +222,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		for j, name := range filterOpt.AllowedDomains {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if !isPattern {
-				if err := validDomainName(name); err != nil {
-					return nil, fmt.Errorf("filter %q: allowed domain name %q is invalid: %w", filterOpt.Name, name, err)
+				if err := validLowerDomainName(name); err != nil {
+					return nil, fmt.Errorf("filter %q: allowed domain name %q is invalid: domain name %w", filterOpt.Name, name, err)
 				}
 			}
 
@@ -239,14 +241,39 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			}
 		}
 
+		for j, name := range filterOpt.AllowedTargets {
+			isPattern := strings.ContainsAny(name, globTokens)
+			if !isPattern {
+				if err := validLowerDomainName(name); err != nil {
+					return nil, fmt.Errorf("filter %q: allowed target name %q is invalid: domain name %w", filterOpt.Name, name, err)
+				}
+			}
+
+			g, err := createDomainMatcher(name)
+			if err != nil {
+				return nil, fmt.Errorf("filter %q: compiling allowed target name pattern %q: %w", filterOpt.Name, name, err)
+			}
+			config.Filters[i].allowedTargetMatchers = append(config.Filters[i].allowedTargetMatchers, g)
+
+			if slices.Contains(filterOpt.AllowedDomains, name) {
+				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as an allowed domain name as well", filterOpt.Name, name)
+			}
+			if slices.Contains(filterOpt.CachedDomains, name) {
+				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
+			}
+			if j != len(filterOpt.AllowedTargets)-1 && slices.Contains(filterOpt.AllowedTargets[j+1:], name) {
+				return nil, fmt.Errorf("filter %q: allowed target name %q is specified more than once", filterOpt.Name, name)
+			}
+		}
+
 		for j, name := range filterOpt.CachedDomains {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if isPattern {
 				return nil, fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern, domain names to be cached must be exact domain names only", filterOpt.Name, name)
 			}
 
-			if err := validDomainName(name); err != nil {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is invalid: %w", filterOpt.Name, name, err)
+			if err := validLowerDomainName(name); err != nil {
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
 			}
 			if j != len(filterOpt.CachedDomains)-1 && slices.Contains(filterOpt.CachedDomains[j+1:], name) {
 				return nil, fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
@@ -398,15 +425,30 @@ func checkPattern(pattern string) error {
 	}
 }
 
+// checkPattern will return an error if any uppercase characters are
+// found but this allows us to have less confusing error messages
+// without mentioning a pattern
+func validLowerDomainName(dn string) error {
+	if err := validDomainName(dn); err != nil {
+		return err
+	}
+
+	if strings.ToLower(dn) != dn {
+		return errors.New("contains uppercase characters, only lowercase characters are allowed in patterns to allow for case-insensitive matching")
+	}
+
+	return nil
+}
+
 func validDomainName(dn string) error {
 	if dn == "" {
-		return errors.New("domain name is empty")
+		return errors.New("is empty")
 	} else if len(dn) > 255 {
-		return errors.New("domain name exceeds 255 characters")
+		return errors.New("exceeds 255 characters")
 	}
 
 	if dn[0] == '.' {
-		return errors.New("domain name starts with a dot")
+		return errors.New("starts with a dot")
 	}
 
 	labelLen := 0
@@ -415,22 +457,30 @@ func validDomainName(dn string) error {
 		labelLen++
 
 		if labelLen == 1 && r == '-' {
-			return errors.New("domain name label starts with a dash")
+			return errors.New("label starts with a dash")
 		}
 
 		if r == '.' {
 			if labelLen > 63 {
-				return errors.New("domain name label exceeds 63 characters")
+				return errors.New("label exceeds 63 characters")
 			} else if lastRune == '-' {
-				return errors.New("domain name label ends with a dash")
+				return errors.New("label ends with a dash")
+			} else if labelLen == 1 && lastRune == '.' {
+				return errors.New("label is empty")
 			}
 
 			labelLen = 0
 		} else if !validDomainRune(r) {
-			return fmt.Errorf("domain name contains illegal character %c", r)
+			return fmt.Errorf("contains illegal character %c", r)
 		}
 
 		lastRune = r
+	}
+
+	if labelLen > 63 {
+		return errors.New("label exceeds 63 characters")
+	} else if lastRune == '-' {
+		return errors.New("label ends with a dash")
 	}
 
 	return nil

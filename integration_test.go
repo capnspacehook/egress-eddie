@@ -55,16 +55,21 @@ trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "3s"
 allowedDomains = [
-	"*.debian.org",
-	"debian.map.fastly.net",
-	"facebook.com",
 	"google.com",
 	"*.google.com",
-	"aspmx.*.google.com",
-	"*.aspmx.*.google.com",
 	"gist.github.com",
-	"github.com",
+
+	"*.debian.org",
+
 	"twitter.com",
+]
+allowedTargets = [
+	"github.com",
+
+	"debian.map.fastly.net",
+
+	"aspmx.*.google.com",
+	"alt[1-4].aspmx.*.google.com",
 ]`
 
 	initFilters(
@@ -114,6 +119,9 @@ allowedDomains = [
 		is.True(reqFailed(err)) // request to disallowed domain should fail
 
 		err = makeHTTPReqs(client4, client6, "https://ggoogle.com")
+		is.True(reqFailed(err)) // request to disallowed domain should fail
+
+		err = makeHTTPReqs(client4, client6, "https://blog.github.com")
 		is.True(reqFailed(err)) // test subdomain matching works correctly
 
 		_, err = client4.Get("https://1.1.1.1")
@@ -121,18 +129,6 @@ allowedDomains = [
 		if *enableIPv6 {
 			_, err = client6.Get("https://[2606:4700:4700::1111]")
 			is.True(reqFailed(err)) // request to IPv6 IP of disallowed domain should fail
-		}
-	})
-
-	t.Run("MX", func(t *testing.T) {
-		is := is.New(t)
-
-		mailDomains, err := net.DefaultResolver.LookupMX(getTimeout(t), "twitter.com")
-		is.NoErr(err) // MX request to allowed domain should succeed
-
-		for _, mailDomain := range mailDomains {
-			_, _, err = lookupIPs(t, mailDomain.Host)
-			is.NoErr(err) // lookup of allowed mail domain should succeed
 		}
 	})
 
@@ -145,6 +141,18 @@ allowedDomains = [
 		for _, server := range servers {
 			_, _, err = lookupIPs(t, server.Target)
 			is.NoErr(err) // lookup of allowed server should succeed
+		}
+	})
+
+	t.Run("MX", func(t *testing.T) {
+		is := is.New(t)
+
+		mailDomains, err := net.DefaultResolver.LookupMX(getTimeout(t), "twitter.com")
+		is.NoErr(err) // MX request to allowed domain should succeed
+
+		for _, mailDomain := range mailDomains {
+			_, _, err = lookupIPs(t, mailDomain.Host)
+			is.NoErr(err) // lookup of allowed mail domain should succeed
 		}
 	})
 

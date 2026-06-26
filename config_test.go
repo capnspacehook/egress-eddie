@@ -1157,32 +1157,42 @@ func TestValidDomainName(t *testing.T) {
 		{
 			name:       "with underscore",
 			domainName: "domain_name.com",
-			err:        "domain name contains illegal character _",
+			err:        "contains illegal character _",
 		},
 		{
 			name:       "with symbol",
 			domainName: "sub#dom.domain.com",
-			err:        "domain name contains illegal character #",
+			err:        "contains illegal character #",
 		},
 		{
 			name:       "with leading hyphen",
 			domainName: "-sub.domain.com",
-			err:        "domain name label starts with a dash",
+			err:        "label starts with a dash",
 		},
 		{
 			name:       "with trailing hyphen",
 			domainName: "sub-.domain.com",
-			err:        "domain name label ends with a dash",
+			err:        "label ends with a dash",
 		},
 		{
 			name:       "too long",
 			domainName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com",
-			err:        "domain name exceeds 255 characters",
+			err:        "exceeds 255 characters",
 		},
 		{
 			name:       "label too long",
 			domainName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.domain.com",
-			err:        "domain name label exceeds 63 characters",
+			err:        "label exceeds 63 characters",
+		},
+		{
+			name:       "last label too long",
+			domainName: "sub.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			err:        "label exceeds 63 characters",
+		},
+		{
+			name:       "empty label",
+			domainName: "a..com",
+			err:        "label is empty",
 		},
 	}
 
