@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,16 @@ const (
 	// TODO: should this be configurable?
 	dnsQueryTimeout = time.Minute
 )
+
+var allowedAnswerRRs = []uint16{
+	dns.TypeA,
+	dns.TypeAAAA,
+	dns.TypeCNAME,
+	dns.TypeSRV,
+	dns.TypeHTTPS,
+	dns.TypeSVCB,
+	dns.TypeMX,
+}
 
 type FilterManager struct {
 	signaler *signaler
@@ -649,8 +660,17 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (bool, error) {
 func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 	q := dnsMsg.Question[0]
 	for _, a := range dnsMsg.Answer {
-		if ok, err := f.validateDNSName(q.Qtype, a.Header().Name); !ok || err != nil {
+		h := a.Header()
+		if ok, err := f.validateDNSName(q.Qtype, h.Name); !ok || err != nil {
 			return false, err
+		}
+
+		if !slices.Contains(allowedAnswerRRs, h.Rrtype) {
+			typeName, ok := dns.TypeToString[h.Rrtype]
+			if !ok {
+				typeName = "unknown-" + strconv.Itoa(int(h.Rrtype))
+			}
+			return false, fmt.Errorf("disallowed RR type %s in answer section", typeName)
 		}
 	}
 
@@ -661,7 +681,6 @@ func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
 	// strip prefix labels from appropriate question types, ex a domain
 	// for a SRV record might begin with '_https._tcp'
 	var strippedName string
-	// TODO: support HTTPS/SVCB?
 	switch qtype {
 	case dns.TypeSRV:
 		s, labelsStripped := stripPrefixLabels(name)
@@ -670,7 +689,20 @@ func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
 		} else if labelsStripped > 2 {
 			return false, fmt.Errorf("domain name %q has too many prefix labels", name)
 		}
-
+		strippedName = s
+	case dns.TypeHTTPS:
+		s, labelsStripped := stripPrefixLabels(name)
+		if labelsStripped != 0 && labelsStripped != 2 {
+			return false, fmt.Errorf("domain name %q has an unexpected number of prefix labels", name)
+		}
+		strippedName = s
+	case dns.TypeSVCB:
+		s, labelsStripped := stripPrefixLabels(name)
+		if labelsStripped == 0 {
+			return false, fmt.Errorf("domain name %q does not have any prefix labels", name)
+		} else if labelsStripped > 2 {
+			return false, fmt.Errorf("domain name %q has too many prefix labels", name)
+		}
 		strippedName = s
 	default:
 		strippedName = name
@@ -881,13 +913,19 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 						connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
 					}
 				case *dns.CNAME:
-					// temporarily add CNAME answers to allowed domain list
+					// temporarily add CNAME targets to allowed domain list
 					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
 				case *dns.SRV:
-					// temporarily add SRV answers to allowed domain list
+					// temporarily add SRV targets to allowed domain list
+					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+				case *dns.HTTPS:
+					// temporarily add HTTPS targets to allowed domain list
+					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
+				case *dns.SVCB:
+					// temporarily add SVCB targets to allowed domain list
 					connFilter.additionalDomains.AddEntry(string(answer.Target), ttl)
 				case *dns.MX:
-					// temporarily add MX answers to allowed domain list
+					// temporarily add MX targets to allowed domain list
 					connFilter.additionalDomains.AddEntry(string(answer.Mx), ttl)
 				default:
 					// drop all other answer types
