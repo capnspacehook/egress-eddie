@@ -683,29 +683,36 @@ func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
 	return true, nil
 }
 
-// TODO: test
 func stripPrefixLabels(domain string) (string, int) {
 	if domain == "" {
 		return "", 0
 	}
 
-	var idx int
-	var end bool
 	var numFound int
-
-	if domain[0] == '_' {
-		numFound++
+	if domain[0] != '_' {
+		return domain, 0
 	}
 
-	// max number of prefixed labels for all record types we support is 2
+	idx, end := dns.NextLabel(domain, 0)
+	if end {
+		return domain, 0
+	}
+	numFound++
+
+	// max number of prefixed labels for all record types we support
+	// is 2, but we want to know if more than 2 prefix labels were
+	// found
 	for range 2 {
-		idx, end = dns.NextLabel(domain, idx)
+		if domain[idx] != '_' {
+			break
+		}
+
+		i, end := dns.NextLabel(domain, idx)
 		if end {
 			break
 		}
-		if len(domain[idx:]) == 0 || domain[idx] != '_' {
-			break
-		}
+
+		idx = i
 		numFound++
 	}
 

@@ -242,7 +242,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		for j, name := range filterOpt.CachedDomains {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if isPattern {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern", filterOpt.Name, name)
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern, domain names to be cached must be exact domain names only", filterOpt.Name, name)
 			}
 
 			if err := validDomainName(name); err != nil {
@@ -358,43 +358,42 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 }
 
 func createDomainMatcher(name string) (glob.Glob, error) {
-	// lowercase text portions of the pattern so we can match it
-	// case-insensitively later
-	lowerName, err := lowercasePattern(name)
-	if err != nil {
+	// enforce that the pattern contains no uppercase characters to make
+	// domain matching case-insensitive later and to prevent suprising
+	// behavior if instead the pattern was silently lowercased instead
+	if err := checkPattern(name); err != nil {
 		return nil, err
 	}
 
-	return glob.Compile(lowerName, '.')
+	return glob.Compile(name, '.')
 }
 
-// TODO: document that character class chars will be lowercased but
-// ranges won't be
-func lowercasePattern(name string) (string, error) {
-	if name == "" {
-		return "", errors.New("domain name is empty")
+func checkPattern(pattern string) error {
+	if pattern == "" {
+		return errors.New("pattern is empty")
 	}
 
-	l := lexer.NewLexer(name)
-
-	var lowerName string
+	l := lexer.NewLexer(pattern)
 	for {
 		token := l.Next()
 		switch token.Type {
 		case lexer.EOF:
-			return lowerName, nil
+			return nil
 		case lexer.Error:
-			return "", errors.New(token.Raw)
+			return errors.New(token.Raw)
+		case lexer.RangeLow:
+			fallthrough
+		case lexer.RangeHigh:
+			fallthrough
 		case lexer.Text:
 			for _, r := range token.Raw {
+				if r >= 'A' && r <= 'Z' {
+					return fmt.Errorf("pattern contains uppercase character %c, only lowercase characters are allowed in patterns to allow for case-insensitive matching", r)
+				}
 				if !validDomainRune(r) {
-					return "", fmt.Errorf("domain name contains illegal character %c", r)
+					return fmt.Errorf("pattern contains illegal character %c", r)
 				}
 			}
-
-			lowerName += strings.ToLower(token.Raw)
-		default:
-			lowerName += token.Raw
 		}
 	}
 }

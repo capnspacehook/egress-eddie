@@ -693,6 +693,39 @@ reCacheEvery = "1s"`,
 		expectedErr:    `filter "foo": "selfDNSQueue" and "trafficQueue" must be different`,
 	},
 	{
+		testName: "allowedDomain with uppercase characters",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+dnsQueue.ipv4 = 1000
+trafficQueue.ipv4 = 1001
+allowAnswersFor = "5s"
+allowedDomains = [
+	"domain.com",
+	"*.domain.[A-Z]om",
+]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": compiling allowed domain name pattern "*.domain.[A-Z]om": pattern contains uppercase character A, only lowercase characters are allowed in patterns to allow for case-insensitive matching`,
+	},
+	{
+		testName: "cachedDomain with pattern",
+		configStr: `
+inboundDNSQueue.ipv4 = 1
+
+[[filters]]
+name = "foo"
+trafficQueue.ipv4 = 1001
+reCacheEvery = "1s"
+cachedDomains = [
+	"domain.com",
+	"*.domain.[A-Z]om",
+]`,
+		expectedConfig: nil,
+		expectedErr:    `filter "foo": domain name to be cached "*.domain.[A-Z]om" is a glob pattern, domain names to be cached must be exact domain names only`,
+	},
+	{
 		testName: "valid allowAllDomains is set",
 		configStr: `
 inboundDNSQueue.ipv4 = 1
@@ -1083,7 +1116,7 @@ func TestParseConfig(t *testing.T) {
 				is.NoErr(err)
 			} else {
 				is.True(err != nil)
-				is.Equal(err.Error(), tt.expectedErr)
+				is.Equal(tt.expectedErr, err.Error())
 			}
 
 			if config != nil {
@@ -1093,59 +1126,6 @@ func TestParseConfig(t *testing.T) {
 				}
 			}
 			is.Equal(tt.expectedConfig, config)
-		})
-	}
-}
-
-func TestLowercasePattern(t *testing.T) {
-	is := is.New(t)
-
-	tests := []struct {
-		name       string
-		pattern    string
-		err        string
-		lowercased string
-	}{
-		{
-			name:       "lowercase",
-			pattern:    "domain.com",
-			lowercased: "domain.com",
-		},
-		{
-			name:       "mixed case",
-			pattern:    "DoMain.CoM",
-			lowercased: "domain.com",
-		},
-		{
-			name:       "lowercase with character class",
-			pattern:    "domain[A-Z].com",
-			lowercased: "domain[A-Z].com",
-		},
-		{
-			name:       "mixed case with character class",
-			pattern:    "DoMain[A-Z].CoM",
-			lowercased: "domain[A-Z].com",
-		},
-		{
-			name:       "mixed case complex pattern",
-			pattern:    `*.[a-ZIu]*\A\b.???.asT**UId.{[I-Ou],**AnC??}`,
-			lowercased: `*.[a-Ziu]*ab.???.ast**uid.{[I-Ou],**anc??}`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			is := is.New(t)
-
-			lowercased, err := lowercasePattern(tt.pattern)
-			if tt.err == "" {
-				is.NoErr(err)
-			} else {
-				is.True(err != nil)
-				is.Equal(err.Error(), tt.err)
-			}
-
-			is.Equal(tt.lowercased, lowercased)
 		})
 	}
 }

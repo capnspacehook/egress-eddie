@@ -2,10 +2,109 @@ package egresseddie
 
 import (
 	"net/netip"
+	"strings"
 
 	"github.com/gopacket/gopacket/layers"
 	"pgregory.net/rapid"
 )
+
+var (
+	domainMembers   []rune
+	genDomainMember *rapid.Generator[rune]
+)
+
+func init() {
+	for r := 'a'; r <= 'z'; r++ {
+		domainMembers = append(domainMembers, r)
+	}
+	for r := 'A'; r <= 'Z'; r++ {
+		domainMembers = append(domainMembers, r)
+	}
+	for r := '0'; r <= '9'; r++ {
+		domainMembers = append(domainMembers, r)
+	}
+
+	genDomainMember = rapid.SampledFrom(domainMembers)
+}
+
+type PrefixedDomainName struct {
+	Name          string
+	PrefixLabels  int
+	PostPrefixIdx int
+}
+
+func GenPrefixedDomainName() *rapid.Generator[PrefixedDomainName] {
+	return rapid.Custom(func(t *rapid.T) PrefixedDomainName {
+		var sb strings.Builder
+
+		maxNameLen := rapid.IntRange(16, 253).Draw(t, "maxNameLen")
+		numLabels := rapid.IntRange(1, 4).Draw(t, "numLabels")
+		numPrefixLabels := rapid.IntRange(0, 3).Draw(t, "numPrefixLabels")
+		maxLen := maxNameLen / (2 * (numLabels + numPrefixLabels))
+
+		var idx int
+		for range numPrefixLabels {
+			sb.WriteByte('_')
+			labelLen := rapid.IntRange(0, maxLen-1).Draw(t, "labelLen")
+			for range labelLen {
+				sb.WriteRune(genDomainMember.Draw(t, "domainMember"))
+			}
+			sb.WriteByte('.')
+
+			idx += labelLen + 2
+		}
+
+		for range numLabels {
+			labelLen := rapid.IntRange(1, maxLen).Draw(t, "labelLen")
+			for range labelLen {
+				sb.WriteRune(genDomainMember.Draw(t, "domainMember"))
+			}
+			sb.WriteByte('.')
+		}
+
+		return PrefixedDomainName{
+			Name:          sb.String(),
+			PrefixLabels:  numPrefixLabels,
+			PostPrefixIdx: idx,
+		}
+	})
+}
+
+func GenDomainName() *rapid.Generator[string] {
+	return rapid.Custom(func(t *rapid.T) string {
+		var sb strings.Builder
+
+		maxNameLen := rapid.IntRange(32, 253).Draw(t, "maxNameLen")
+		numLabels := rapid.IntRange(1, 16).Draw(t, "numLabels")
+		maxLen := min(maxNameLen/(2*numLabels), 62)
+
+		for i := range numLabels {
+			labelLen := rapid.IntRange(1, maxLen).Draw(t, "labelLen")
+			for range labelLen {
+				sb.WriteRune(genDomainMember.Draw(t, "domainMember"))
+			}
+
+			if i != numLabels-1 {
+				sb.WriteByte('.')
+			}
+		}
+
+		return sb.String()
+	})
+}
+
+func GenLabel() *rapid.Generator[string] {
+	return rapid.Custom(func(t *rapid.T) string {
+		var sb strings.Builder
+
+		labelLen := rapid.IntRange(1, 62).Draw(t, "labelLen")
+		for range labelLen {
+			sb.WriteRune(genDomainMember.Draw(t, "domainMember"))
+		}
+
+		return sb.String()
+	})
+}
 
 func GenIPv4Addr() *rapid.Generator[netip.Addr] {
 	return rapid.Custom(func(t *rapid.T) netip.Addr {

@@ -15,11 +15,6 @@ import (
 	"github.com/capnspacehook/egress-eddie/timedcache"
 )
 
-const (
-	domainRegex = `(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])`
-	labelRegex  = "[a-zA-Z0-9]{1,63}"
-)
-
 func TestDomainAllowed(t *testing.T) {
 	rapid.Check(t, testDomainAllowed)
 }
@@ -29,25 +24,22 @@ func FuzzDomainAllowed(f *testing.F) {
 }
 
 func testDomainAllowed(t *rapid.T) {
-	allowedDomain := rapid.StringMatching(domainRegex).Draw(t, "allowedDomain")
-	label := rapid.StringMatching(labelRegex).Draw(t, "label")
-	_, isValidDomain := dns.IsDomainName(label)
+	allowedDomain := GenDomainName().Draw(t, "allowedDomain")
+	label := GenLabel().Draw(t, "label")
 
-	trailingDot := label[len(label)-1] == '.'
 	equal := strings.EqualFold(label, allowedDomain)
-
 	lastDotIdx := strings.LastIndexByte(allowedDomain, '.')
 	var lastLabelEqual bool
 	if lastDotIdx != -1 && len(allowedDomain) > lastDotIdx+1 {
 		lastLabelEqual = strings.EqualFold(allowedDomain[lastDotIdx+1:], label)
 	}
 
-	matcher, err := createDomainMatcher(allowedDomain)
+	lowerAllowedDomain := strings.ToLower(allowedDomain)
+	matcher, err := createDomainMatcher(lowerAllowedDomain)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	subPattern := "*." + allowedDomain
+	subPattern := "*." + lowerAllowedDomain
 	subMatcher, err := createDomainMatcher(subPattern)
 	if err != nil {
 		t.Fatal(err)
@@ -75,23 +67,19 @@ func testDomainAllowed(t *rapid.T) {
 	if domainAllowed(t, f, "."+allowedDomain) {
 		t.Fatal("allowed domain with leading dot should not be allowed")
 	}
-	if isValidDomain {
-		newDomain := label + "." + allowedDomain
-		if !domainAllowed(t, f, newDomain) {
-			t.Fatal("subdomain of allowed domain should be allowed")
-		}
-		if !domainAllowed(t, f, strings.ToLower(newDomain)) {
-			t.Fatal("lowercased subdomain of allowed domain should be allowed")
-		}
-		if !domainAllowed(t, f, strings.ToUpper(newDomain)) {
-			t.Fatal("uppercased subdomain of allowed domain should be allowed")
-		}
+	newDomain := label + "." + allowedDomain
+	if !domainAllowed(t, f, newDomain) {
+		t.Fatal("subdomain of allowed domain should be allowed")
+	}
+	if !domainAllowed(t, f, strings.ToLower(newDomain)) {
+		t.Fatal("lowercased subdomain of allowed domain should be allowed")
+	}
+	if !domainAllowed(t, f, strings.ToUpper(newDomain)) {
+		t.Fatal("uppercased subdomain of allowed domain should be allowed")
 	}
 
-	if !trailingDot {
-		if domainAllowed(t, f, label+allowedDomain) {
-			t.Fatal("random string prepended to allowed domain should not be allowed")
-		}
+	if domainAllowed(t, f, label+allowedDomain) {
+		t.Fatal("random string prepended to allowed domain should not be allowed")
 	}
 	if domainAllowed(t, f, allowedDomain+label) {
 		t.Fatal("random string concatenated to allowed domain should not be allowed")
@@ -224,4 +212,18 @@ func testConnectionID(t *rapid.T) {
 	if connID != connID2 {
 		t.Fatal("connection IDs should be the same")
 	}
+}
+
+func TestStripPrefixLabels(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		pd := GenPrefixedDomainName().Draw(t, "prefixedDomain")
+
+		stripped, numLabels := stripPrefixLabels(pd.Name)
+		if numLabels != pd.PrefixLabels {
+			t.Errorf("numLabels mismatch: want %d, got %d", pd.PrefixLabels, numLabels)
+		}
+		if stripped != pd.Name[pd.PostPrefixIdx:] {
+			t.Errorf("stripped name mismatch: want %q, got %q", pd.Name[pd.PostPrefixIdx:], stripped)
+		}
+	})
 }
