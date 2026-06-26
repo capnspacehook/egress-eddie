@@ -187,13 +187,6 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, full
 	f.dnsRespNF6 = nf6
 
 	for i := range config.Filters {
-		// fully qualify all domains in the config, github.com/miekg/dns
-		// will ensure question and answer names are fully qualified, so
-		// it's less work to do it here once instead of trimming every
-		// question and answer name
-		fullyQualifyDomains(config.Filters[i].AllowedDomains)
-		fullyQualifyDomains(config.Filters[i].CachedDomains)
-
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
 		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, f.fullDNSLogging, newEnforcer, res)
 		if err != nil {
@@ -205,12 +198,6 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, full
 	}
 
 	return &f, nil
-}
-
-func fullyQualifyDomains(domains []string) {
-	for i := range domains {
-		domains[i] = dns.Fqdn(domains[i])
-	}
 }
 
 // Start starts packet filtering.
@@ -530,9 +517,16 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
-			if !f.opts.AllowAllDomains && !f.validateDNSQuestions(dnsMsg) {
-				logger.Warn("dropping DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
-				return dropVerdict
+			if !f.opts.AllowAllDomains {
+				ok, err := f.validateDNSQuestion(dnsMsg)
+				if err != nil {
+					logger.Warn("dropping DNS request", f.dropReasonFields(err, dnsMsg)...)
+					return dropVerdict
+				}
+				if !ok {
+					logger.Warn("dropping DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
+					return dropVerdict
+				}
 			}
 
 			logger.Info("allowing DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
@@ -635,39 +629,115 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 	return &dnsMsg, connID, nil
 }
 
-func (f *filter) validateDNSQuestions(dnsMsg *dns.Msg) bool {
+func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (bool, error) {
 	if len(dnsMsg.Question) == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		return false
+		return false, errors.New("no questions in DNS request")
+	} else if len(dnsMsg.Question) > 1 {
+		// drop DNS requests with more than one question; this is
+		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
+		return false, fmt.Errorf("%d questions in DNS request", len(dnsMsg.Question))
 	}
 
-	for i := range dnsMsg.Question {
-		// bail out if any of the questions don't contain an allowed
-		// domain
-		if !f.domainAllowed(dnsMsg.Question[i].Name) {
-			return false
+	q := dnsMsg.Question[0]
+	return f.validateDNSName(q.Qtype, q.Name)
+}
+
+// TODO: validate question matches request question
+func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
+	q := dnsMsg.Question[0]
+	for _, a := range dnsMsg.Answer {
+		if ok, err := f.validateDNSName(q.Qtype, a.Header().Name); !ok || err != nil {
+			return false, err
 		}
 	}
 
-	return true
+	return true, nil
 }
 
-func (f *filter) domainAllowed(domain string) bool {
-	for j := range f.opts.AllowedDomains {
-		if domain == f.opts.AllowedDomains[j] || dns.IsSubDomain(f.opts.AllowedDomains[j], domain) {
-			return true
+func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
+	// strip prefix labels from appropriate question types, ex a domain
+	// for a SRV record might begin with '_https._tcp'
+	var strippedName string
+	// TODO: support HTTPS/SVCB?
+	switch qtype {
+	case dns.TypeSRV:
+		s, labelsStripped := stripPrefixLabels(name)
+		if labelsStripped < 2 {
+			return false, fmt.Errorf("domain name %q does not have enough prefix labels", name)
+		} else if labelsStripped > 2 {
+			return false, fmt.Errorf("domain name %q has too many prefix labels", name)
+		}
+
+		strippedName = s
+	default:
+		strippedName = name
+	}
+
+	if ok, err := f.domainAllowed(strippedName); !ok || err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// TODO: test
+func stripPrefixLabels(domain string) (string, int) {
+	if domain == "" {
+		return "", 0
+	}
+
+	var idx int
+	var end bool
+	var numFound int
+
+	if domain[0] == '_' {
+		numFound++
+	}
+
+	// max number of prefixed labels for all record types we support is 2
+	for range 2 {
+		idx, end = dns.NextLabel(domain, idx)
+		if end {
+			break
+		}
+		if len(domain[idx:]) == 0 || domain[idx] != '_' {
+			break
+		}
+		numFound++
+	}
+
+	return domain[idx:], numFound
+}
+
+func (f *filter) domainAllowed(domain string) (bool, error) {
+	err := validDomainName(domain)
+	if err != nil {
+		return false, err
+	}
+
+	if domain[len(domain)-1] == '.' {
+		domain = domain[:len(domain)-1]
+	}
+	lowerDomain := strings.ToLower(domain)
+
+	f.logger.Debug("checking if domain is allowed", zap.String("domain", domain))
+
+	for _, matcher := range f.opts.allowedDomainMatchers {
+		if matcher.Match(lowerDomain) {
+			return true, nil
 		}
 	}
 
 	// the self-filter doesn't have a nfqueue for generic traffic, and
 	// therefore won't have a cache for additional domains
 	if f.isSelfFilter {
-		return false
+		return false, nil
 	}
 
-	return f.additionalDomains.EntryExists(domain)
+	return f.additionalDomains.EntryExists(lowerDomain), nil
 }
 
 func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback) nfqueue.HookFunc {
@@ -746,11 +816,13 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			}
 
 			// validate DNS response questions are for allowed
-			// domains, drop them otherwise; responses for disallowed
-			// domains should never happen in theory, because we
-			// block requests for disallowed domains but it doesn't
-			// hurt to check
-			if !connFilter.validateDNSQuestions(dnsMsg) {
+			// domains, drop them otherwise
+			questionsOK, err := connFilter.validateDNSQuestion(dnsMsg)
+			if err != nil {
+				logger.Info("dropping DNS reply", connFilter.dropReasonFields(err, dnsMsg)...)
+				return dropVerdict
+			}
+			if !questionsOK {
 				logger.Info("dropping DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
@@ -762,14 +834,21 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return acceptVerdict
 			}
 
+			// validate all DNS answer owner names before adding any
+			// IPs or domains any allowed lists
+			answersOK, err := connFilter.validateDNSAnswers(dnsMsg)
+			if err != nil {
+				logger.Info("dropping DNS reply", connFilter.dropReasonFields(err, dnsMsg)...)
+				return dropVerdict
+			}
+			if !answersOK {
+				logger.Info("dropping DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				return dropVerdict
+			}
+
 			ttl := connFilter.opts.AllowAnswersFor
 			for _, a := range dnsMsg.Answer {
-				aName := string(a.Header().Name)
-				if !connFilter.domainAllowed(aName) {
-					logger.Info("dropping DNS reply", zap.String("answer", aName))
-					return dropVerdict
-				}
-
+				// TODO: support HTTPS/SVCB?
 				switch answer := a.(type) {
 				case *dns.A:
 					// temporarily add A answers to allowed IP list
@@ -810,7 +889,10 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 						typeName = "unknown-" + strconv.Itoa(int(answer.Header().Rrtype))
 					}
 
-					logger.Info("dropping DNS reply with disallowed type", zap.String("answer", aName), zap.String("type", typeName))
+					logger.Info(
+						"dropping DNS reply with disallowed type",
+						append([]zap.Field{zap.String("type", typeName)}, dnsFields(dnsMsg, f.fullDNSLogging)...)...,
+					)
 					return dropVerdict
 				}
 			}
@@ -929,6 +1011,10 @@ func (f *filter) validateIPs(src, dst netip.Addr) bool {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
 	return f.allowedIPs.EntryExists(dst) || f.allowedIPs.EntryExists(src)
+}
+
+func (f *filter) dropReasonFields(reason error, dnsMsg *dns.Msg) []zap.Field {
+	return append([]zap.Field{zap.String("reason", reason.Error())}, dnsFields(dnsMsg, f.fullDNSLogging)...)
 }
 
 func newErrorCallback(logger *zap.Logger) nfqueue.ErrorFunc {

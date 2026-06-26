@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/capnspacehook/glob v0.0.0-20260626023508-ee0ef131248e
 	github.com/florianl/go-nfqueue v1.3.2
 	github.com/gopacket/gopacket v1.6.1
 	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3

@@ -8,13 +8,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	_ "unsafe" // only needed for go:linkname directive
 
 	"github.com/BurntSushi/toml"
-	"github.com/miekg/dns"
+	"github.com/capnspacehook/glob"
+	"github.com/capnspacehook/glob/syntax/lexer"
 )
 
-const selfFilterName = "self-filter"
+const (
+	selfFilterName = "self-filter"
+
+	globTokens = `*?[]{}\`
+)
 
 type queue struct {
 	IPv4 uint16
@@ -73,6 +77,8 @@ type FilterOptions struct {
 	ReCacheEvery    time.Duration
 	AllowedDomains  []string
 	CachedDomains   []string
+
+	allowedDomainMatchers []glob.Glob
 }
 
 func ParseConfig(confPath string) (*Config, error) {
@@ -211,22 +217,38 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be negative`, filterOpt.Name)
 		}
 
-		for i, name := range filterOpt.AllowedDomains {
-			if !validDomainName(name) {
-				return nil, fmt.Errorf("filter %q: allowed domain name %q is not a valid domain name", filterOpt.Name, name)
+		for j, name := range filterOpt.AllowedDomains {
+			isPattern := strings.ContainsAny(name, globTokens)
+			if !isPattern {
+				if err := validDomainName(name); err != nil {
+					return nil, fmt.Errorf("filter %q: allowed domain name %q is invalid: %w", filterOpt.Name, name, err)
+				}
 			}
+
+			g, err := createDomainMatcher(name)
+			if err != nil {
+				return nil, fmt.Errorf("filter %q: compiling allowed domain name pattern %q: %w", filterOpt.Name, name, err)
+			}
+			config.Filters[i].allowedDomainMatchers = append(config.Filters[i].allowedDomainMatchers, g)
+
 			if slices.Contains(filterOpt.CachedDomains, name) {
 				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
-			if i != len(filterOpt.AllowedDomains)-1 && slices.Contains(filterOpt.AllowedDomains[i+1:], name) {
+			if j != len(filterOpt.AllowedDomains)-1 && slices.Contains(filterOpt.AllowedDomains[j+1:], name) {
 				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
-		for i, name := range filterOpt.CachedDomains {
-			if !validDomainName(name) {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is not a valid domain name", filterOpt.Name, name)
+
+		for j, name := range filterOpt.CachedDomains {
+			isPattern := strings.ContainsAny(name, globTokens)
+			if isPattern {
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern", filterOpt.Name, name)
 			}
-			if i != len(filterOpt.CachedDomains)-1 && slices.Contains(filterOpt.CachedDomains[i+1:], name) {
+
+			if err := validDomainName(name); err != nil {
+				return nil, fmt.Errorf("filter %q: domain name to be cached %q is invalid: %w", filterOpt.Name, name, err)
+			}
+			if j != len(filterOpt.CachedDomains)-1 && slices.Contains(filterOpt.CachedDomains[j+1:], name) {
 				return nil, fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
@@ -316,6 +338,15 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			DNSQueue: config.SelfDNSQueue,
 		}
 
+		for _, name := range allCachedDomains {
+			m, err := createDomainMatcher(name)
+			if err != nil {
+				return nil, fmt.Errorf("compiling domain name to be cached pattern %q: %w", name, err)
+			}
+
+			selfFilter.allowedDomainMatchers = append(selfFilter.allowedDomainMatchers, m)
+		}
+
 		if len(allCachedDomains) > 0 {
 			selfFilter.AllowedDomains = append(selfFilter.AllowedDomains, allCachedDomains...)
 		}
@@ -326,11 +357,89 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	return &config, nil
 }
 
-func validDomainName(dn string) bool {
-	if dn == "" {
-		return false
+func createDomainMatcher(name string) (glob.Glob, error) {
+	// lowercase text portions of the pattern so we can match it
+	// case-insensitively later
+	lowerName, err := lowercasePattern(name)
+	if err != nil {
+		return nil, err
 	}
 
-	_, ok := dns.IsDomainName(dn)
-	return ok
+	return glob.Compile(lowerName, '.')
+}
+
+// TODO: document that character class chars will be lowercased but
+// ranges won't be
+func lowercasePattern(name string) (string, error) {
+	if name == "" {
+		return "", errors.New("domain name is empty")
+	}
+
+	l := lexer.NewLexer(name)
+
+	var lowerName string
+	for {
+		token := l.Next()
+		switch token.Type {
+		case lexer.EOF:
+			return lowerName, nil
+		case lexer.Error:
+			return "", errors.New(token.Raw)
+		case lexer.Text:
+			for _, r := range token.Raw {
+				if !validDomainRune(r) {
+					return "", fmt.Errorf("domain name contains illegal character %c", r)
+				}
+			}
+
+			lowerName += strings.ToLower(token.Raw)
+		default:
+			lowerName += token.Raw
+		}
+	}
+}
+
+func validDomainName(dn string) error {
+	if dn == "" {
+		return errors.New("domain name is empty")
+	} else if len(dn) > 255 {
+		return errors.New("domain name exceeds 255 characters")
+	}
+
+	if dn[0] == '.' {
+		return errors.New("domain name starts with a dot")
+	}
+
+	labelLen := 0
+	lastRune := rune(-1)
+	for _, r := range dn {
+		labelLen++
+
+		if labelLen == 1 && r == '-' {
+			return errors.New("domain name label starts with a dash")
+		}
+
+		if r == '.' {
+			if labelLen > 63 {
+				return errors.New("domain name label exceeds 63 characters")
+			} else if lastRune == '-' {
+				return errors.New("domain name label ends with a dash")
+			}
+
+			labelLen = 0
+		} else if !validDomainRune(r) {
+			return fmt.Errorf("domain name contains illegal character %c", r)
+		}
+
+		lastRune = r
+	}
+
+	return nil
+}
+
+func validDomainRune(r rune) bool {
+	if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '.' {
+		return true
+	}
+	return false
 }

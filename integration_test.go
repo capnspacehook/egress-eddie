@@ -55,10 +55,15 @@ trafficQueue.ipv4 = 1001
 trafficQueue.ipv6 = 1011
 allowAnswersFor = "3s"
 allowedDomains = [
-	"debian.org",
+	"*.debian.org",
+	"debian.map.fastly.net",
 	"facebook.com",
 	"google.com",
+	"*.google.com",
+	"aspmx.*.google.com",
+	"*.aspmx.*.google.com",
 	"gist.github.com",
+	"github.com",
 	"twitter.com",
 ]`
 
@@ -84,8 +89,14 @@ allowedDomains = [
 		err := makeHTTPReqs(client4, client6, "https://google.com")
 		is.NoErr(err) // request to allowed domain should succeed
 
+		err = makeHTTPReqs(client4, client6, "https://gOOgLe.cOm")
+		is.NoErr(err) // request to allowed domain with different casing should succeed
+
 		err = makeHTTPReqs(client4, client6, "https://news.google.com")
 		is.NoErr(err) // request to allowed subdomain of domain should succeed
+
+		err = makeHTTPReqs(client4, client6, "https://NEWs.GOOGle.COm")
+		is.NoErr(err) // request to allowed subdomain of domain with different casing should succeed
 
 		// TODO: github.com does not have AAAA record, so this will fail over
 		// IPv6. Find other website that will work here
@@ -572,7 +583,7 @@ func reqFailed(err error) bool {
 func getTimeout(t *testing.T) context.Context {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	t.Cleanup(cancel)
 
 	return ctx

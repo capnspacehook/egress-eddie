@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/capnspacehook/glob"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/miekg/dns"
@@ -41,64 +42,85 @@ func testDomainAllowed(t *rapid.T) {
 		lastLabelEqual = strings.EqualFold(allowedDomain[lastDotIdx+1:], label)
 	}
 
+	matcher, err := createDomainMatcher(allowedDomain)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	subPattern := "*." + allowedDomain
+	subMatcher, err := createDomainMatcher(subPattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	f := &filter{
 		opts: &FilterOptions{
-			AllowedDomains: []string{allowedDomain},
+			allowedDomainMatchers: []glob.Glob{matcher, subMatcher},
 		},
 		logger: zap.NewNop(),
 
 		additionalDomains: timedcache.New[string](zap.NewNop(), false),
 	}
 
-	if !f.domainAllowed(strings.ToLower(allowedDomain)) {
+	if !domainAllowed(t, f, strings.ToLower(allowedDomain)) {
 		t.Fatal("lowercased allowed domain should be allowed")
 	}
-	if !f.domainAllowed(strings.ToUpper(allowedDomain)) {
+	if !domainAllowed(t, f, strings.ToUpper(allowedDomain)) {
 		t.Fatal("uppercased allowed domain should be allowed")
 	}
 
-	if !f.domainAllowed(allowedDomain) {
+	if !domainAllowed(t, f, allowedDomain) {
 		t.Fatal("allowed domain should be allowed")
 	}
-	if !f.domainAllowed("." + allowedDomain) {
-		t.Fatal("allowed domain with leading dot should be allowed")
+	if domainAllowed(t, f, "."+allowedDomain) {
+		t.Fatal("allowed domain with leading dot should not be allowed")
 	}
 	if isValidDomain {
 		newDomain := label + "." + allowedDomain
-		if !f.domainAllowed(newDomain) {
+		if !domainAllowed(t, f, newDomain) {
 			t.Fatal("subdomain of allowed domain should be allowed")
 		}
-		if !f.domainAllowed(strings.ToLower(newDomain)) {
+		if !domainAllowed(t, f, strings.ToLower(newDomain)) {
 			t.Fatal("lowercased subdomain of allowed domain should be allowed")
 		}
-		if !f.domainAllowed(strings.ToUpper(newDomain)) {
+		if !domainAllowed(t, f, strings.ToUpper(newDomain)) {
 			t.Fatal("uppercased subdomain of allowed domain should be allowed")
 		}
 	}
 
 	if !trailingDot {
-		if f.domainAllowed(label + allowedDomain) {
+		if domainAllowed(t, f, label+allowedDomain) {
 			t.Fatal("random string prepended to allowed domain should not be allowed")
 		}
 	}
-	if f.domainAllowed(allowedDomain + label) {
+	if domainAllowed(t, f, allowedDomain+label) {
 		t.Fatal("random string concatenated to allowed domain should not be allowed")
 	}
-	if f.domainAllowed(label + allowedDomain + label) {
+	if domainAllowed(t, f, label+allowedDomain+label) {
 		t.Fatal("random string surrounding allowed domain should not be allowed")
 	}
 
 	if !equal && !lastLabelEqual {
-		if f.domainAllowed(allowedDomain + "." + label) {
+		if domainAllowed(t, f, allowedDomain+"."+label) {
 			t.Fatal("random label concatenated to allowed domain should not be allowed")
 		}
-		if f.domainAllowed(label + "." + allowedDomain + "." + label) {
+		if domainAllowed(t, f, label+"."+allowedDomain+"."+label) {
 			t.Fatal("random label surrounding allowed domain should not be allowed")
 		}
 	}
-	if equal && !f.domainAllowed(label) {
+	if equal && !domainAllowed(t, f, label) {
 		t.Fatal("label equal to allowed domain should be allowed")
 	}
+}
+
+func domainAllowed(t *rapid.T, f *filter, domain string) bool {
+	t.Helper()
+
+	ok, err := f.domainAllowed(domain)
+	if err != nil {
+		t.Log(err)
+	}
+	return ok
 }
 
 func FuzzConnectionID(f *testing.F) {

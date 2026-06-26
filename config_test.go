@@ -524,7 +524,7 @@ trafficQueue.ipv4 = 1001
 allowAnswersFor = "10s"
 allowedDomains = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": allowed domain name "" is not a valid domain name`,
+		expectedErr:    `filter "foo": allowed domain name "" is invalid: domain name is empty`,
 	},
 	{
 		testName: "shared allowed and cached domain name",
@@ -573,7 +573,7 @@ trafficQueue.ipv4 = 1001
 reCacheEvery = "10s"
 cachedDomains = [""]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": domain name to be cached "" is not a valid domain name`,
+		expectedErr:    `filter "foo": domain name to be cached "" is invalid: domain name is empty`,
 	},
 	{
 		testName: "duplicate cached domain name",
@@ -1085,7 +1085,138 @@ func TestParseConfig(t *testing.T) {
 				is.True(err != nil)
 				is.Equal(err.Error(), tt.expectedErr)
 			}
-			is.Equal(config, tt.expectedConfig)
+
+			if config != nil {
+				// clear matchers so we can compare the rest of the config
+				for i := range config.Filters {
+					config.Filters[i].allowedDomainMatchers = nil
+				}
+			}
+			is.Equal(tt.expectedConfig, config)
+		})
+	}
+}
+
+func TestLowercasePattern(t *testing.T) {
+	is := is.New(t)
+
+	tests := []struct {
+		name       string
+		pattern    string
+		err        string
+		lowercased string
+	}{
+		{
+			name:       "lowercase",
+			pattern:    "domain.com",
+			lowercased: "domain.com",
+		},
+		{
+			name:       "mixed case",
+			pattern:    "DoMain.CoM",
+			lowercased: "domain.com",
+		},
+		{
+			name:       "lowercase with character class",
+			pattern:    "domain[A-Z].com",
+			lowercased: "domain[A-Z].com",
+		},
+		{
+			name:       "mixed case with character class",
+			pattern:    "DoMain[A-Z].CoM",
+			lowercased: "domain[A-Z].com",
+		},
+		{
+			name:       "mixed case complex pattern",
+			pattern:    `*.[a-ZIu]*\A\b.???.asT**UId.{[I-Ou],**AnC??}`,
+			lowercased: `*.[a-Ziu]*ab.???.ast**uid.{[I-Ou],**anc??}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := is.New(t)
+
+			lowercased, err := lowercasePattern(tt.pattern)
+			if tt.err == "" {
+				is.NoErr(err)
+			} else {
+				is.True(err != nil)
+				is.Equal(err.Error(), tt.err)
+			}
+
+			is.Equal(tt.lowercased, lowercased)
+		})
+	}
+}
+
+func TestValidDomainName(t *testing.T) {
+	is := is.New(t)
+
+	tests := []struct {
+		name       string
+		domainName string
+		err        string
+	}{
+		{
+			name:       "valid",
+			domainName: "domain.com",
+		},
+		{
+			name:       "valid with dash",
+			domainName: "domain-name.com",
+		},
+		{
+			name:       "valid many labels",
+			domainName: "a.b.c.d.e.f.g.domain.com",
+		},
+		{
+			name:       "valid with dot at end",
+			domainName: "domain.com.",
+		},
+		{
+			name:       "with underscore",
+			domainName: "domain_name.com",
+			err:        "domain name contains illegal character _",
+		},
+		{
+			name:       "with symbol",
+			domainName: "sub#dom.domain.com",
+			err:        "domain name contains illegal character #",
+		},
+		{
+			name:       "with leading hyphen",
+			domainName: "-sub.domain.com",
+			err:        "domain name label starts with a dash",
+		},
+		{
+			name:       "with trailing hyphen",
+			domainName: "sub-.domain.com",
+			err:        "domain name label ends with a dash",
+		},
+		{
+			name:       "too long",
+			domainName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.com",
+			err:        "domain name exceeds 255 characters",
+		},
+		{
+			name:       "label too long",
+			domainName: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.domain.com",
+			err:        "domain name label exceeds 63 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := is.New(t)
+
+			err := validDomainName(tt.domainName)
+			if tt.err == "" {
+				is.NoErr(err)
+			} else {
+				is.True(err != nil)
+				is.Equal(tt.err, err.Error())
+			}
 		})
 	}
 }
