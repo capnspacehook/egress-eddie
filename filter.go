@@ -75,10 +75,9 @@ type filter struct {
 
 	res resolver
 
-	// TODO: check ID and questions between requests and responses
-	connections       *timedcache.TimedCache[connectionID]
-	allowedIPs        *timedcache.TimedCache[netip.Addr]
-	additionalDomains *timedcache.TimedCache[string]
+	connections       *timedcache.TimedCache[connectionID, *dns.Msg]
+	allowedIPs        *timedcache.TimedCache[netip.Addr, struct{}]
+	additionalDomains *timedcache.TimedCache[string, struct{}]
 
 	isSelfFilter bool
 }
@@ -250,13 +249,13 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
 		res:             res,
-		connections:     timedcache.New[connectionID](logger, true),
+		connections:     timedcache.New[connectionID, *dns.Msg](logger, true),
 		isSelfFilter:    isSelfFilter,
 	}
 
 	if opts.TrafficQueue.eitherSet() {
-		f.allowedIPs = timedcache.New[netip.Addr](f.logger, false)
-		f.additionalDomains = timedcache.New[string](filterLogger, false)
+		f.allowedIPs = timedcache.New[netip.Addr, struct{}](f.logger, false)
+		f.additionalDomains = timedcache.New[string, struct{}](filterLogger, false)
 
 		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, newGenericCallback(&f))
 		if err != nil {
@@ -402,7 +401,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger) {
 
 			for i := range addrs {
 				logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]))
-				f.allowedIPs.AddEntry(addrs[i], ttl)
+				f.allowedIPs.Add(addrs[i], ttl)
 
 				// If the IP address is an IPv4-mapped IPv6 address,
 				// add the unwrapped IPv4 address too. That is what
@@ -410,7 +409,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger) {
 				if addrs[i].Is4In6() {
 					addrs[i] = addrs[i].Unmap()
 					logger.Info("allowing IP from cached lookup", zap.Stringer("ip", addrs[i]))
-					f.allowedIPs.AddEntry(addrs[i], ttl)
+					f.allowedIPs.Add(addrs[i], ttl)
 				}
 			}
 		}
@@ -528,7 +527,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			logger.Info("allowing DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
 
 			logger.Debug("adding connection")
-			f.connections.AddEntry(connID, dnsQueryTimeout)
+			f.connections.AddValue(connID, dnsMsg, dnsQueryTimeout)
 
 			return acceptVerdict
 		}
@@ -649,12 +648,30 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
 	return nil
 }
 
-// TODO: validate question matches request question
-func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
-	if len(dnsMsg.Question) == 0 {
-		return false, errors.New("no questions in DNS response")
+func (f *filter) compareDNSReqResp(req, resp *dns.Msg) error {
+	if req.Id != resp.Id {
+		return errors.New("request and response IDs do not match")
 	}
 
+	if len(resp.Question) == 0 {
+		return errors.New("no questions in DNS response")
+	}
+
+	// the response question should match the request's question
+	reqQ := req.Question[0]
+	respQ := resp.Question[0]
+	if reqQ.Qtype != respQ.Qtype {
+		return errors.New("request and response question types do not match")
+	} else if reqQ.Qclass != respQ.Qclass {
+		return errors.New("request and response question classes do not match")
+	} else if !strings.EqualFold(reqQ.Name, respQ.Name) {
+		return errors.New("request and response question names do not match")
+	}
+
+	return nil
+}
+
+func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 	q := dnsMsg.Question[0]
 	var allowedTargets []string
 
@@ -666,10 +683,10 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 		if !slices.Contains(allowedTargets, prepareDomainName(h.Name)) {
 			ok, err := f.validateDNSName(q.Qtype, h.Name)
 			if err != nil {
-				return false, fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(h.Rrtype), err)
+				return fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(h.Rrtype), err)
 			}
 			if !ok {
-				return false, fmt.Errorf("owner domain name %q in answer of RR type %s is not allowed", h.Name, rrTypeToString(h.Rrtype))
+				return fmt.Errorf("owner domain name %q in answer of RR type %s is not allowed", h.Name, rrTypeToString(h.Rrtype))
 			}
 		}
 
@@ -696,7 +713,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 			if !ok {
 				typeName = "unknown-" + strconv.Itoa(int(h.Rrtype))
 			}
-			return false, fmt.Errorf("disallowed RR type %s for answer", typeName)
+			return fmt.Errorf("disallowed RR type %s for answer", typeName)
 		}
 		if emptyTarget {
 			continue
@@ -704,15 +721,15 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 
 		ok, err := f.targetAllowed(target)
 		if err != nil {
-			return false, fmt.Errorf("validating target %q in answer of RR type %s: %w", target, rrTypeToString(h.Rrtype), err)
+			return fmt.Errorf("validating target %q in answer of RR type %s: %w", target, rrTypeToString(h.Rrtype), err)
 		}
 		if !ok {
-			return false, fmt.Errorf("target domain name %q in answer is not allowed", target)
+			return fmt.Errorf("target domain name %q in answer is not allowed", target)
 		}
 		allowedTargets = append(allowedTargets, prepareDomainName(target))
 	}
 
-	return true, nil
+	return nil
 }
 
 func rrTypeToString(rrType uint16) string {
@@ -847,7 +864,7 @@ func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 		}
 	}
 
-	return f.additionalDomains.EntryExists(lowerDomain), nil
+	return f.additionalDomains.Exists(lowerDomain), nil
 }
 
 // prepareDomainName removes a trailing dot and lowercases the domain
@@ -905,66 +922,68 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return dropVerdict
 			}
 
-			dnsMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
+			respMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 			if err != nil {
 				logger.Error("error parsing DNS packet", zap.Error(err))
-				if dnsMsg != nil {
-					logger.Info("offending DNS packet", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				if respMsg != nil {
+					logger.Info("offending DNS packet", dnsFields(respMsg, f.fullDNSLogging)...)
 				}
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
 			var connFilter *filter
+			var reqMsg *dns.Msg
 			for _, filter := range f.filters {
-				if filter.connections.EntryExists(connID) {
+				if msg, ok := filter.connections.Lookup(connID); ok {
 					connFilter = filter
+					reqMsg = msg
 					break
 				}
 			}
 			if connFilter == nil {
-				logger.Warn("dropping DNS response from unknown connection", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Warn("dropping DNS response from unknown connection", dnsFields(respMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 			logger.Debug("removing connection")
-			connFilter.connections.RemoveEntry(connID)
+			connFilter.connections.Remove(connID)
 
 			logger = logger.With(zap.String("dns-req.filter.name", connFilter.opts.Name))
 			// allow and don't process the DNS response if all domains
 			// are allowed
 			if connFilter.opts.AllowAllDomains {
-				logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}
 
 			// validate DNS response questions are for allowed
 			// domains, drop them otherwise
-			if err := connFilter.validateDNSQuestion(dnsMsg); err != nil {
-				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, dnsMsg)...)
+			if err := connFilter.validateDNSQuestion(respMsg); err != nil {
+				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
+				return dropVerdict
+			}
+			// confirm that the request and response ID and question matches
+			if err := connFilter.compareDNSReqResp(reqMsg, respMsg); err != nil {
+				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
 				return dropVerdict
 			}
 
 			// allow DNS response if the filter it came from is the self
 			// filter or if there are no answers
-			if connFilter.isSelfFilter || len(dnsMsg.Answer) == 0 {
-				logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
+			if connFilter.isSelfFilter || len(respMsg.Answer) == 0 {
+				logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}
 
 			// validate all DNS answer owner names before adding any
 			// IPs or domains any allowed lists
-			answersOK, err := connFilter.validateDNSAnswers(dnsMsg)
-			if err != nil {
-				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, dnsMsg)...)
-				return dropVerdict
-			}
-			if !answersOK {
-				logger.Info("dropping DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
+			if err := connFilter.validateDNSAnswers(respMsg); err != nil {
+				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
 				return dropVerdict
 			}
 
 			ttl := connFilter.opts.AllowAnswersFor
-			for _, a := range dnsMsg.Answer {
+			for _, a := range respMsg.Answer {
 				var target string
 				switch answer := a.(type) {
 				case *dns.A:
@@ -973,20 +992,20 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
 						continue
 					}
-					connFilter.allowedIPs.AddEntry(ip, ttl)
+					connFilter.allowedIPs.Add(ip, ttl)
 				case *dns.AAAA:
 					ip, ok := netip.AddrFromSlice(answer.AAAA)
 					if !ok {
 						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
 						continue
 					}
-					connFilter.allowedIPs.AddEntry(ip, ttl)
+					connFilter.allowedIPs.Add(ip, ttl)
 
 					// If the IP address is an IPv4-mapped IPv6 address,
 					// add the unwrapped IPv4 address too. That is what
 					// will most likely be used.
 					if ip.Is4In6() {
-						connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
+						connFilter.allowedIPs.Add(ip.Unmap(), ttl)
 					}
 				case *dns.CNAME:
 					target = answer.Target
@@ -1003,11 +1022,11 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				}
 				// temporarily allow resolution of the target domain, but skip root domains
 				if target != "" && target != "." {
-					connFilter.additionalDomains.AddEntry(prepareDomainName(target), ttl)
+					connFilter.additionalDomains.Add(prepareDomainName(target), ttl)
 				}
 			}
 
-			logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
+			logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 
 			return acceptVerdict
 		}
@@ -1120,7 +1139,7 @@ func newGenericCallback(f *filter) hookCreator {
 func (f *filter) validateIPs(src, dst netip.Addr) bool {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
-	return f.allowedIPs.EntryExists(dst) || f.allowedIPs.EntryExists(src)
+	return f.allowedIPs.Exists(dst) || f.allowedIPs.Exists(src)
 }
 
 func (f *filter) dropReasonFields(reason error, dnsMsg *dns.Msg) []zap.Field {

@@ -51,7 +51,7 @@ func testDomainAllowed(t *rapid.T) {
 		},
 		logger: zap.NewNop(),
 
-		additionalDomains: timedcache.New[string](zap.NewNop(), false),
+		additionalDomains: timedcache.New[string, struct{}](zap.NewNop(), false),
 	}
 
 	if !domainAllowed(t, f, strings.ToLower(allowedDomain)) {

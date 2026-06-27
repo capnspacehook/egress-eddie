@@ -21,11 +21,11 @@ func TestTimedCacheDeadlock(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	is.NoErr(err)
 
-	tc := New[int](logger, true)
-	tc.AddEntry(42, time.Second)
+	tc := New[int, struct{}](logger, true)
+	tc.Add(42, time.Second)
 	time.Sleep(time.Second)
 
-	tc.AddEntry(42, time.Second)
+	tc.Add(42, time.Second)
 }
 
 func TestTimedCache(t *testing.T) {
@@ -34,34 +34,34 @@ func TestTimedCache(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	is.NoErr(err)
 
-	tc := New[int](logger, false)
+	tc := New[int, struct{}](logger, false)
 
 	t.Run("timed deletion", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Millisecond)
-		is.True(tc.EntryExists(42))
+		tc.Add(42, 100*time.Millisecond)
+		is.True(tc.Exists(42))
 		time.Sleep(150 * time.Millisecond)
-		is.True(!tc.EntryExists(42))
+		is.True(!tc.Exists(42))
 	})
 
 	t.Run("changing ttl", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Second)
-		is.True(tc.EntryExists(42))
-		tc.AddEntry(42, 100*time.Millisecond)
+		tc.Add(42, 100*time.Second)
+		is.True(tc.Exists(42))
+		tc.Add(42, 100*time.Millisecond)
 		time.Sleep(150 * time.Millisecond)
-		is.True(!tc.EntryExists(42))
+		is.True(!tc.Exists(42))
 	})
 
 	t.Run("removal", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Millisecond)
-		is.True(tc.EntryExists(42))
-		tc.RemoveEntry(42)
-		is.True(!tc.EntryExists(42))
+		tc.Add(42, 100*time.Millisecond)
+		is.True(tc.Exists(42))
+		tc.Remove(42)
+		is.True(!tc.Exists(42))
 	})
 }
 
@@ -71,48 +71,48 @@ func TestTimedCacheWithCount(t *testing.T) {
 	logger, err := zap.NewDevelopment()
 	is.NoErr(err)
 
-	tc := New[int](logger, true)
+	tc := New[int, struct{}](logger, true)
 
 	t.Run("timed deletion", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Millisecond)
-		is.True(tc.EntryExists(42))
+		tc.Add(42, 100*time.Millisecond)
+		is.True(tc.Exists(42))
 		time.Sleep(150 * time.Millisecond)
-		is.True(!tc.EntryExists(42))
+		is.True(!tc.Exists(42))
 	})
 
 	t.Run("changing ttl", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Second)
-		is.True(tc.EntryExists(42))
-		tc.AddEntry(42, 100*time.Millisecond)
+		tc.Add(42, 100*time.Second)
+		is.True(tc.Exists(42))
+		tc.Add(42, 100*time.Millisecond)
 		time.Sleep(150 * time.Millisecond)
-		is.True(!tc.EntryExists(42))
+		is.True(!tc.Exists(42))
 	})
 
 	t.Run("timed deletion with count", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Millisecond)
-		is.True(tc.EntryExists(42))
-		tc.AddEntry(42, 100*time.Millisecond)
-		tc.RemoveEntry(42)
-		is.True(tc.EntryExists(42))
+		tc.Add(42, 100*time.Millisecond)
+		is.True(tc.Exists(42))
+		tc.Add(42, 100*time.Millisecond)
+		tc.Remove(42)
+		is.True(tc.Exists(42))
 		time.Sleep(150 * time.Millisecond)
-		is.True(!tc.EntryExists(42))
+		is.True(!tc.Exists(42))
 	})
 
 	t.Run("removal", func(t *testing.T) {
 		is := is.New(t)
 
-		tc.AddEntry(42, 100*time.Millisecond)
-		is.True(tc.EntryExists(42))
-		tc.AddEntry(42, 100*time.Millisecond)
-		tc.RemoveEntry(42)
-		tc.RemoveEntry(42)
-		is.True(!tc.EntryExists(42))
+		tc.Add(42, 100*time.Millisecond)
+		is.True(tc.Exists(42))
+		tc.Add(42, 100*time.Millisecond)
+		tc.Remove(42)
+		tc.Remove(42)
+		is.True(!tc.Exists(42))
 	})
 }
 
@@ -137,7 +137,7 @@ func testTimedCacheState(t *rapid.T) {
 			t.Fatal(err)
 		}
 
-		tc := New[int](logger, true)
+		tc := New[int, struct{}](logger, true)
 		t.Cleanup(tc.Stop)
 
 		state := make(map[int]stateEntry)
@@ -151,15 +151,15 @@ func testTimedCacheState(t *rapid.T) {
 				secs := rapid.IntRange(1, 100).Draw(t, "ttl")
 				ttl := time.Duration(secs) * time.Second
 
-				existsPrior := tc.EntryExists(i)
+				existsPrior := tc.Exists(i)
 				var curCount int
 				if existsPrior {
-					curCount = tc.entryCount(i) + 1
+					curCount = tc.keyCount(i) + 1
 				}
 
-				tc.AddEntry(i, ttl)
+				tc.Add(i, ttl)
 				now := time.Now()
-				if !tc.EntryExists(i) {
+				if !tc.Exists(i) {
 					t.Fatal("entry should exist")
 				}
 
@@ -169,9 +169,9 @@ func testTimedCacheState(t *rapid.T) {
 					count:   curCount,
 				}
 
-				count := tc.entryCount(i)
+				count := tc.keyCount(i)
 				if count != curCount {
-					t.Logf("stateCount=%d entryCount=%d", curCount, count)
+					t.Logf("stateCount=%d keyCount=%d", curCount, count)
 					t.Fatal("count should match")
 				}
 
@@ -189,8 +189,8 @@ func testTimedCacheState(t *rapid.T) {
 				entries := slices.Collect(maps.Keys(state))
 				i := rapid.SampledFrom(entries).Draw(t, "entry")
 
-				tc.RemoveEntry(i)
-				exists := tc.EntryExists(i)
+				tc.Remove(i)
+				exists := tc.Exists(i)
 				now := time.Now()
 
 				s := state[i]
@@ -226,7 +226,7 @@ func testTimedCacheState(t *rapid.T) {
 
 				now := time.Now()
 				for i, s := range state {
-					exists := tc.EntryExists(i)
+					exists := tc.Exists(i)
 					deadline := s.created.Add(s.ttl)
 
 					if !exists && now.Before(deadline) {
@@ -236,7 +236,7 @@ func testTimedCacheState(t *rapid.T) {
 					}
 
 					if exists {
-						count := tc.entryCount(i)
+						count := tc.keyCount(i)
 						if count != s.count {
 							t.Logf("key=%d state=%#v entry=%#v", i, s, tc.cache[i])
 							t.Fatal("count should match")
