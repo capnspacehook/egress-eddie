@@ -187,11 +187,18 @@ func testConnectionID(t *rapid.T) {
 
 	// inverse
 	if !ipv6 {
-		ipv4Layer := ipLayer.(*layers.IPv4)
+		ipv4Layer, ok := ipLayer.(*layers.IPv4)
+		if !ok {
+			t.Fatalf("unexpected IPv4 layer type %T", ipLayer)
+		}
 		ipv4Layer.SrcIP = dstIP.AsSlice()
 		ipv4Layer.DstIP = srcIP.AsSlice()
 	} else {
-		ipv6Layer := ipLayer.(*layers.IPv6)
+		ipv6Layer, ok := ipLayer.(*layers.IPv6)
+		if !ok {
+			t.Fatalf("unexpected IPv6 layer type %T", ipLayer)
+		}
+
 		ipv6Layer.SrcIP = dstIP.AsSlice()
 		ipv6Layer.DstIP = srcIP.AsSlice()
 	}

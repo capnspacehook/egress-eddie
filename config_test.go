@@ -494,7 +494,7 @@ trafficQueue.ipv4 = 1001
 reCacheEvery = "1s"
 cachedDomains = ["foo"]`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedDomains" is empty and "cachedHostames" is not empty`,
+		expectedErr:    `filter "foo": "dnsQueue" must not be set when "allowedDomains" is empty and "cachedDomains" is not empty`,
 	},
 	{
 		testName: "selfDNSQueue set",

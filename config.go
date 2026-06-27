@@ -155,7 +155,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue.ipv6" must not be set when "inboundDNSQueue.ipv6" is not set`, filterOpt.Name)
 		}
 		if filterOpt.DNSQueue.eitherSet() && len(filterOpt.AllowedDomains) == 0 && len(filterOpt.CachedDomains) > 0 {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedHostames" is not empty`, filterOpt.Name)
+			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedDomains" is not empty`, filterOpt.Name)
 		}
 		if queuesShared(config.InboundDNSQueue, filterOpt.DNSQueue) {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
@@ -386,7 +386,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 func createDomainMatcher(name string) (glob.Glob, error) {
 	// enforce that the pattern contains no uppercase characters to make
-	// domain matching case-insensitive later and to prevent suprising
+	// domain matching case-insensitive later and to prevent surprising
 	// behavior if instead the pattern was silently lowercased instead
 	if err := checkPattern(name); err != nil {
 		return nil, err

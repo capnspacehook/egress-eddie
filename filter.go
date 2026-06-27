@@ -38,16 +38,6 @@ const (
 	dnsQueryTimeout = time.Minute
 )
 
-var allowedAnswerRRs = []uint16{
-	dns.TypeA,
-	dns.TypeAAAA,
-	dns.TypeCNAME,
-	dns.TypeSRV,
-	dns.TypeHTTPS,
-	dns.TypeSVCB,
-	dns.TypeMX,
-}
-
 type FilterManager struct {
 	signaler *signaler
 
@@ -522,7 +512,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			}
 			// drop DNS replies, they shouldn't be going to this filter
 			if dnsMsg.Response || len(dnsMsg.Answer) > 0 || len(dnsMsg.Ns) > 0 {
-				logger.Warn("dropping DNS reply sent to DNS request filter", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Warn("dropping DNS response sent to DNS request filter", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
@@ -661,6 +651,10 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
 
 // TODO: validate question matches request question
 func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
+	if len(dnsMsg.Question) == 0 {
+		return false, errors.New("no questions in DNS response")
+	}
+
 	q := dnsMsg.Question[0]
 	var allowedTargets []string
 
@@ -669,7 +663,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 
 		// if the owner name is a target from a previous allowed RR it's
 		// safe to allow it
-		if !slices.Contains(allowedTargets, strings.ToLower(h.Name)) {
+		if !slices.Contains(allowedTargets, prepareDomainName(h.Name)) {
 			ok, err := f.validateDNSName(q.Qtype, h.Name)
 			if err != nil {
 				return false, fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(h.Rrtype), err)
@@ -680,10 +674,13 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 		}
 
 		// ensure all target answers are allowed
+		var emptyTarget bool
 		var target string
 		switch answer := a.(type) {
 		case *dns.A:
+			emptyTarget = true
 		case *dns.AAAA:
+			emptyTarget = true
 		case *dns.CNAME:
 			target = answer.Target
 		case *dns.SRV:
@@ -701,7 +698,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 			}
 			return false, fmt.Errorf("disallowed RR type %s for answer", typeName)
 		}
-		if target == "" {
+		if emptyTarget {
 			continue
 		}
 
@@ -712,7 +709,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) (bool, error) {
 		if !ok {
 			return false, fmt.Errorf("target domain name %q in answer is not allowed", target)
 		}
-		allowedTargets = append(allowedTargets, target)
+		allowedTargets = append(allowedTargets, prepareDomainName(target))
 	}
 
 	return true, nil
@@ -808,8 +805,14 @@ func (f *filter) domainAllowed(domain string) (bool, error) {
 
 // targetAllowed checks if a domain name from specific answer RRs that
 // specify targets is allowed by the filter.
-func (f *filter) targetAllowed(domain string) (bool, error) {
-	return f.domainNameAllowed(domain, true)
+func (f *filter) targetAllowed(target string) (bool, error) {
+	// allow root labels, they're used in HTTPS and other RRs and are
+	// harmless to allow
+	if target == "." {
+		return true, nil
+	}
+
+	return f.domainNameAllowed(target, true)
 }
 
 func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
@@ -850,6 +853,9 @@ func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 // prepareDomainName removes a trailing dot and lowercases the domain
 // name so it can be matched case-insensitively.
 func prepareDomainName(domain string) string {
+	if domain == "" {
+		return ""
+	}
 	if domain[len(domain)-1] == '.' {
 		domain = domain[:len(domain)-1]
 	}
@@ -927,21 +933,21 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			// allow and don't process the DNS response if all domains
 			// are allowed
 			if connFilter.opts.AllowAllDomains {
-				logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}
 
 			// validate DNS response questions are for allowed
 			// domains, drop them otherwise
 			if err := connFilter.validateDNSQuestion(dnsMsg); err != nil {
-				logger.Info("dropping DNS reply", connFilter.dropReasonFields(err, dnsMsg)...)
+				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, dnsMsg)...)
 				return dropVerdict
 			}
 
 			// allow DNS response if the filter it came from is the self
 			// filter or if there are no answers
 			if connFilter.isSelfFilter || len(dnsMsg.Answer) == 0 {
-				logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}
 
@@ -949,19 +955,19 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			// IPs or domains any allowed lists
 			answersOK, err := connFilter.validateDNSAnswers(dnsMsg)
 			if err != nil {
-				logger.Info("dropping DNS reply", connFilter.dropReasonFields(err, dnsMsg)...)
+				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, dnsMsg)...)
 				return dropVerdict
 			}
 			if !answersOK {
-				logger.Info("dropping DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Info("dropping DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
 			ttl := connFilter.opts.AllowAnswersFor
 			for _, a := range dnsMsg.Answer {
+				var target string
 				switch answer := a.(type) {
 				case *dns.A:
-					// temporarily add A answers to allowed IP list
 					ip, ok := netip.AddrFromSlice(answer.A)
 					if !ok {
 						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
@@ -969,7 +975,6 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 					}
 					connFilter.allowedIPs.AddEntry(ip, ttl)
 				case *dns.AAAA:
-					// temporarily add A answers to allowed IP list
 					ip, ok := netip.AddrFromSlice(answer.AAAA)
 					if !ok {
 						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
@@ -984,26 +989,25 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 						connFilter.allowedIPs.AddEntry(ip.Unmap(), ttl)
 					}
 				case *dns.CNAME:
-					// temporarily add CNAME targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
+					target = answer.Target
 				case *dns.SRV:
-					// temporarily add SRV targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
+					target = answer.Target
 				case *dns.HTTPS:
-					// temporarily add HTTPS targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
+					target = answer.Target
 				case *dns.SVCB:
-					// temporarily add SVCB targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Target), ttl)
+					target = answer.Target
 				case *dns.MX:
-					// temporarily add MX targets to allowed domain list
-					connFilter.additionalDomains.AddEntry(prepareDomainName(answer.Mx), ttl)
+					target = answer.Mx
 				default:
 					// other answer types are rejected in (*filter).validateDNSAnswers
 				}
+				// temporarily allow resolution of the target domain, but skip root domains
+				if target != "" && target != "." {
+					connFilter.additionalDomains.AddEntry(prepareDomainName(target), ttl)
+				}
 			}
 
-			logger.Info("allowing DNS reply", dnsFields(dnsMsg, f.fullDNSLogging)...)
+			logger.Info("allowing DNS response", dnsFields(dnsMsg, f.fullDNSLogging)...)
 
 			return acceptVerdict
 		}
