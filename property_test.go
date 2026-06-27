@@ -1,35 +1,5 @@
 package egresseddie
 
-// This file is the skeleton for the main property-based test of egress-eddie.
-//
-// Goal: assert the core security properties hold under a randomized sequence
-// of DNS requests, DNS responses, and L7 traffic packets driven through the
-// real filter via the mock enforcers:
-//
-//  P1. A DNS request is accepted iff its single question name is allowed by
-//      the config (or is currently in additionalDomains via a prior chain).
-//  P2. A DNS response is accepted iff it correlates to a stored request
-//      (matching connID, header ID, and question) AND every answer RR is
-//      allowed (owner names + targets), walking the answer section in order.
-//  P3. IPs / additional domains are added to the allow-caches ONLY from a
-//      response that was fully accepted (never from a dropped one).
-//  P4. L7 traffic is accepted iff its src or dst IP is currently in allowedIPs.
-//
-// Design notes (see discussion):
-//   - Time is made deterministic with rapid.SyncTest (synctest bubble + fake
-//     clock), mirroring timedcache's own tests. An explicit "advance time"
-//     action exercises TTL expiry as a modeled transition.
-//   - The oracle is an INDEPENDENT reimplementation. Domain-name matching is
-//     reduced to membership lookups against a tiny fixed pool of concrete
-//     names so a bug in the glob matcher cannot be mirrored into the oracle.
-//   - DNS packets are built with miekg (msg.Pack) and wrapped in gopacket
-//     IP/UDP so malformed RDATA (empty target, "." target, 0x20 case, etc.)
-//     is reachable exactly as it is from the wire — that's where the known
-//     bugs lived.
-//
-// TODOs are marked inline; the spine (model, oracle, assertions, action map)
-// is filled in, the value generators are stubs to expand.
-
 import (
 	"context"
 	"net/netip"
@@ -303,7 +273,7 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 		t.Log("answers present")
 		q := genQuestion(t)
 		msg.Question = []dns.Question{q}
-		msg.Answer = []dns.RR{genAnswerRR(t, q.Name, q.Qtype)}
+		msg.Answer = []dns.RR{genAnswerRR(t, q.Name)}
 	default:
 		// well-formed single-question request
 		q, badQ := genQuestionClassified(t)
@@ -367,7 +337,7 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 	n := rapid.IntRange(0, 3).Draw(t, "nAnswers")
 	owner := req.qname // first owner is the (correlated) question name
 	for range n {
-		rr, badRR := genAnswerRRClassified(t, genCase(t, owner), q.Qtype)
+		rr, badRR := genAnswerRRClassified(t, genCase(t, owner))
 		if badRR {
 			malformed = true
 		}
@@ -426,40 +396,44 @@ func genBaseNameClassified(t *rapid.T) (name string, malformed bool) {
 
 // genName builds a wire name: base domain, optional qtype-appropriate prefix
 // labels, and 0x20 casing.
-func genNameClassified(t *rapid.T, base string, qtype uint16) (name string, malformed bool) {
-	n := rapid.SampledFrom(prefixCountsFor(qtype)).Draw(t, "prefixCount")
-	if n > 3 {
-		t.Log("invalid prefix label count")
-		malformed = true
-	}
+func genNameClassified(t *rapid.T, base string, qtype uint16) (string, bool) {
+	n, malformed := prefixCountsFor(t, qtype)
 	return genCase(t, genPrefixLabels(t, n)+base), malformed
 }
 
 // prefixCountsFor biases the number of _prefix labels toward the values that
 // make a name valid for the given qtype, while still drawing invalid counts so
 // both paths are exercised.
-func prefixCountsFor(qtype uint16) []int {
+func prefixCountsFor(t *rapid.T, qtype uint16) (int, bool) {
+	var counts []int
 	switch qtype {
 	case dns.TypeSRV: // valid: exactly 2
-		return []int{2, 2, 2, 2, 0, 1, 3}
+		counts = []int{2, 2, 2, 2, 0, 1, 3}
 	case dns.TypeHTTPS: // valid: 0 or 2
-		return []int{0, 0, 2, 2, 1, 3}
+		counts = []int{0, 0, 2, 2, 1, 3}
 	case dns.TypeSVCB: // valid: 1 or 2
-		return []int{1, 1, 2, 2, 0, 3}
+		counts = []int{1, 1, 2, 2, 0, 3}
 	default: // valid: 0
-		return []int{0, 0, 0, 0, 1, 2, 3}
+		counts = []int{0, 0, 0, 0, 1, 2, 3}
 	}
+
+	n := rapid.SampledFrom(counts).Draw(t, "nPrefixLabels")
+	if n > 3 {
+		t.Log("invalid prefix label count")
+		return n, true
+	}
+	return n, false
 }
 
 // genAnswerRR builds one answer RR of a randomly chosen type. Owner is supplied
 // by the caller (the chain driver). Targets are drawn from the pool plus the
 // edge values "" (malformed) and "." (legal no-endpoint).
-func genAnswerRR(t *rapid.T, owner string, qtype uint16) dns.RR {
-	rr, _ := genAnswerRRClassified(t, owner, qtype)
+func genAnswerRR(t *rapid.T, owner string) dns.RR {
+	rr, _ := genAnswerRRClassified(t, owner)
 	return rr
 }
 
-func genAnswerRRClassified(t *rapid.T, owner string, qtype uint16) (_ dns.RR, malformed bool) {
+func genAnswerRRClassified(t *rapid.T, owner string) (_ dns.RR, malformed bool) {
 	hdr := dns.RR_Header{
 		Name: dns.Fqdn(owner),
 		Ttl:  60,
@@ -521,15 +495,14 @@ func genAAAA(t *rapid.T) netip.Addr {
 }
 
 // genTarget draws an RR target: pool names (with casing), the legal "." case,
-// and the malformed "" case. Note "" and "." are normalized by Pack→Unpack, so
-// the oracle (reading the parsed msg) and the filter agree regardless.
+// and the malformed "" case.
 func genTarget(t *rapid.T) (string, bool) {
 	switch rapid.IntRange(0, 9).Draw(t, "targetShape") {
 	case 0:
-		return ".", false // root / no endpoint — legal, skipped
+		return ".", false // root domain is allowed
 	case 1:
 		t.Log("empty target")
-		return "", true // empty — see genTarget note; usually becomes "." on the wire
+		return "", true
 	default:
 		baseName, malformed := genBaseNameClassified(t)
 		return dns.Fqdn(genCase(t, baseName)), malformed

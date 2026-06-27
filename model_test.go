@@ -15,7 +15,7 @@ import (
 // keep the FIRST stored value).
 type storedReq struct {
 	id     uint16
-	qname  string // normalized
+	qname  string
 	qtype  uint16
 	qclass uint16
 	count  int       // counting-cache count (0 == one outstanding)
