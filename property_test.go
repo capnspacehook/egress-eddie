@@ -3,6 +3,7 @@ package egresseddie
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -225,10 +226,24 @@ func testFilterState(t *rapid.T) {
 			},
 			"traffic": func(t *rapid.T) {
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
-				// TODO: draw src/dst from {allowed IPs in model, random}.
-				// accept iff allowedIPs contains src or dst.
-				_ = ipv6
-				// settleAndCheck() // enable once traffic packets are built
+				queue := uint16(qTrafficV4)
+				if ipv6 {
+					queue = qTrafficV6
+				}
+
+				src := genTrafficIP(t, m, ipv6, "src")
+				dst := genTrafficIP(t, m, ipv6, "dst")
+
+				// the traffic callback ignores conntrack state and ports;
+				// accept iff the src or dst IP is currently allowed.
+				_, srcAllowed := m.allowedIPs[src]
+				_, dstAllowed := m.allowedIPs[dst]
+				accept := srcAllowed || dstAllowed
+
+				packet := buildTrafficPacket(t, ipv6, src, dst)
+				v, gotV := d.deliver(queue, drawConnState(t), packet)
+				assertVerdict(t, gotV, v, accept)
+				settleAndCheck()
 			},
 			"advance time": func(t *rapid.T) {
 				secs := rapid.IntRange(1, 70).Draw(t, "secs")
@@ -590,6 +605,10 @@ func connIDFor(ipv6 bool, clientPort uint16) connectionID {
 	}
 }
 
+// buf is safe to reuse as it's cleared before it's used for
+// serialization and avoids extra allocations.
+var buf = gopacket.NewSerializeBuffer()
+
 // buildDNSPacket packs msg and wraps it as an IP+UDP packet in the requested
 // direction. request: client->server:53. response: server:53->client.
 //
@@ -625,7 +644,6 @@ func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, clientPort ui
 	} else {
 		ipLayer = &layers.IPv6{NextHeader: layers.IPProtocolUDP, SrcIP: srcIP.AsSlice(), DstIP: dstIP.AsSlice()}
 	}
-	buf := gopacket.NewSerializeBuffer()
 	err = gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
 		ipLayer,
 		&layers.UDP{SrcPort: layers.UDPPort(srcPort), DstPort: layers.UDPPort(dstPort)},
@@ -635,6 +653,40 @@ func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, clientPort ui
 		t.Fatalf("serializing packet: %v", err)
 	}
 	return buf.Bytes(), &parsedMsg, true
+}
+
+func genTrafficIP(t *rapid.T, m *model, ipv6 bool, label string) netip.Addr {
+	var allowed []netip.Addr
+	for ip := range m.allowedIPs {
+		if ip.Is4() == !ipv6 {
+			allowed = append(allowed, ip)
+		}
+	}
+	if len(allowed) > 0 && rapid.Bool().Draw(t, label+"FromAllowed") {
+		slices.SortFunc(allowed, func(a, b netip.Addr) int { return a.Compare(b) })
+		return rapid.SampledFrom(allowed).Draw(t, label+"IP")
+	}
+	if ipv6 {
+		return GenIPv6Addr().Draw(t, label+"IP")
+	}
+	return GenIPv4Addr().Draw(t, label+"IP")
+}
+
+func buildTrafficPacket(t *rapid.T, ipv6 bool, src, dst netip.Addr) []byte {
+	var ipLayer gopacket.SerializableLayer
+	if !ipv6 {
+		ipLayer = &layers.IPv4{Protocol: layers.IPProtocolUDP, SrcIP: src.AsSlice(), DstIP: dst.AsSlice()}
+	} else {
+		ipLayer = &layers.IPv6{NextHeader: layers.IPProtocolUDP, SrcIP: src.AsSlice(), DstIP: dst.AsSlice()}
+	}
+	if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
+		ipLayer,
+		&layers.UDP{SrcPort: 12345, DstPort: 443},
+		gopacket.Payload([]byte("traffic")),
+	); err != nil {
+		t.Fatalf("serializing traffic packet: %v", err)
+	}
+	return buf.Bytes()
 }
 
 type driver struct {
