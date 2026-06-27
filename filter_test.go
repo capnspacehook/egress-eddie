@@ -134,7 +134,7 @@ func testConnectionID(t *rapid.T) {
 
 	var ipLayer gopacket.SerializableLayer
 	if !ipv6 {
-		ipv4Layer := rapid.Make[layers.IPv4]().Draw(t, "ipv4Layer")
+		ipv4Layer := GenIPv4Layer().Draw(t, "ipv4Layer")
 		ipv4Layer.Protocol = layers.IPProtocolUDP
 		ipv4Layer.SrcIP = srcIP.AsSlice()
 		ipv4Layer.DstIP = dstIP.AsSlice()
@@ -142,7 +142,7 @@ func testConnectionID(t *rapid.T) {
 		ipv4Layer.Contents = nil
 		ipLayer = &ipv4Layer
 	} else {
-		ipv6Layer := rapid.Make[layers.IPv6]().Draw(t, "ipv6Layer")
+		ipv6Layer := GenIPv6Layer().Draw(t, "ipv6Layer")
 		ipv6Layer.NextHeader = layers.IPProtocolUDP
 		ipv6Layer.SrcIP = srcIP.AsSlice()
 		ipv6Layer.DstIP = dstIP.AsSlice()

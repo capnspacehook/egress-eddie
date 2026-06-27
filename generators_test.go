@@ -110,7 +110,7 @@ func GenIPv4Addr() *rapid.Generator[netip.Addr] {
 	return rapid.Custom(func(t *rapid.T) netip.Addr {
 		var buf [4]byte
 		for i := range buf {
-			buf[i] = rapid.Byte().Draw(t, "")
+			buf[i] = rapid.Byte().Draw(t, "b")
 		}
 		return netip.AddrFrom4(buf)
 	})
@@ -120,7 +120,7 @@ func GenIPv6Addr() *rapid.Generator[netip.Addr] {
 	return rapid.Custom(func(t *rapid.T) netip.Addr {
 		var buf [16]byte
 		for i := range buf {
-			buf[i] = rapid.Byte().Draw(t, "")
+			buf[i] = rapid.Byte().Draw(t, "b")
 		}
 		return netip.AddrFrom16(buf)
 	})
@@ -129,20 +129,21 @@ func GenIPv6Addr() *rapid.Generator[netip.Addr] {
 func GenIPv4Layer() *rapid.Generator[layers.IPv4] {
 	return rapid.Custom(func(t *rapid.T) layers.IPv4 {
 		ipv4 := layers.IPv4{
-			Version:    rapid.Uint8().Draw(t, ""),
-			IHL:        rapid.Uint8().Draw(t, ""),
-			TOS:        rapid.Uint8().Draw(t, ""),
-			Length:     rapid.Uint16().Draw(t, ""),
-			Id:         rapid.Uint16().Draw(t, ""),
-			Flags:      layers.IPv4Flag(rapid.Uint8().Draw(t, "")),
-			FragOffset: rapid.Uint16().Draw(t, ""),
-			TTL:        rapid.Uint8().Draw(t, ""),
-			Protocol:   layers.IPProtocol(rapid.Uint8().Draw(t, "")),
-			Checksum:   rapid.Uint16().Draw(t, ""),
-			SrcIP:      GenIPv4Addr().Draw(t, "").AsSlice(),
-			DstIP:      GenIPv4Addr().Draw(t, "").AsSlice(),
-			Options:    rapid.SliceOfN(rapid.Make[layers.IPv4Option](), 0, int(rapid.Uint8().Draw(t, ""))).Draw(t, ""),
-			Padding:    rapid.SliceOfN(rapid.Byte(), 0, int(rapid.Uint16().Draw(t, ""))).Draw(t, ""),
+			Version:    rapid.Uint8().Draw(t, "version"),
+			IHL:        rapid.Uint8().Draw(t, "ihl"),
+			TOS:        rapid.Uint8().Draw(t, "tol"),
+			Length:     rapid.Uint16().Draw(t, "length"),
+			Id:         rapid.Uint16().Draw(t, "id"),
+			Flags:      layers.IPv4Flag(rapid.Uint8().Draw(t, "flags")),
+			FragOffset: rapid.Uint16().Draw(t, "fragOffset"),
+			TTL:        rapid.Uint8().Draw(t, "ttl"),
+			Protocol:   layers.IPProtocol(rapid.Uint8().Draw(t, "protocol")),
+			Checksum:   rapid.Uint16().Draw(t, "checksum"),
+			SrcIP:      GenIPv4Addr().Draw(t, "srcIP").AsSlice(),
+			DstIP:      GenIPv4Addr().Draw(t, "dstIP").AsSlice(),
+			// TODO: uncomment when all gopacket option serializing issues are fixed
+			// Options:    rapid.SliceOfN(rapid.Make[layers.IPv4Option](), 0, int(rapid.Uint8().Draw(t, "len"))).Draw(t, "options"),
+			Padding: rapid.SliceOfN(rapid.Byte(), 0, int(rapid.Uint16().Draw(t, "len"))).Draw(t, "padding"),
 		}
 
 		return ipv4
@@ -152,18 +153,24 @@ func GenIPv4Layer() *rapid.Generator[layers.IPv4] {
 func GenIPv6Layer() *rapid.Generator[layers.IPv6] {
 	return rapid.Custom(func(t *rapid.T) layers.IPv6 {
 		ipv6 := layers.IPv6{
-			Version:      rapid.Uint8().Draw(t, ""),
-			TrafficClass: rapid.Uint8().Draw(t, ""),
-			FlowLabel:    rapid.Uint32().Draw(t, ""),
-			Length:       rapid.Uint16().Draw(t, ""),
-			NextHeader:   layers.IPProtocol(rapid.Uint8().Draw(t, "")),
-			HopLimit:     rapid.Uint8().Draw(t, ""),
-			SrcIP:        GenIPv6Addr().Draw(t, "").AsSlice(),
-			DstIP:        GenIPv6Addr().Draw(t, "").AsSlice(),
+			Version:      rapid.Uint8().Draw(t, "version"),
+			TrafficClass: rapid.Uint8().Draw(t, "trafficClass"),
+			FlowLabel:    rapid.Uint32().Draw(t, "flowLabel"),
+			Length:       rapid.Uint16().Draw(t, "length"),
+			NextHeader:   layers.IPProtocol(rapid.Uint8().Draw(t, "nextHeader")),
+			HopLimit:     rapid.Uint8().Draw(t, "hopLimit"),
+			SrcIP:        GenIPv6Addr().Draw(t, "srcIP").AsSlice(),
+			DstIP:        GenIPv6Addr().Draw(t, "dstIP").AsSlice(),
 		}
 		if rapid.Bool().Draw(t, "") {
-			hopByHop := rapid.Make[layers.IPv6HopByHop]().Draw(t, "")
-			ipv6.HopByHop = &hopByHop
+			opts := rapid.SliceOfN(rapid.Make[layers.IPv6HopByHopOption](), 1, rapid.IntRange(1, 3).Draw(t, "len")).Draw(t, "hopByHopOpts")
+			ptrOpts := make([]*layers.IPv6HopByHopOption, len(opts))
+			for i := range opts {
+				ptrOpts[i] = &opts[i]
+			}
+			ipv6.HopByHop = &layers.IPv6HopByHop{
+				Options: ptrOpts,
+			}
 		}
 
 		return ipv6
