@@ -128,6 +128,14 @@ func (t *TimedCache[K, V]) Lookup(key K) (V, bool) {
 	return ct.value, ok
 }
 
+// Len returns the number of keys currently in the cache.
+func (t *TimedCache[K, V]) Len() int {
+	t.mtx.RLock()
+	defer t.mtx.RUnlock()
+
+	return len(t.cache)
+}
+
 func (t *TimedCache[K, V]) keyCount(key K) int {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
