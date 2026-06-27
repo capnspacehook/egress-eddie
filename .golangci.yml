@@ -43,6 +43,9 @@ linters:
     errcheck:
       exclude-functions:
         - (go.uber.org/zap/zapcore.ObjectEncoder).AddObject
+    gocritic:
+      disabled-checks:
+        - ifElseChain
     misspell:
       locale: US
     paralleltest:

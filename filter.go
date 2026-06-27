@@ -715,7 +715,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 			}
 			return fmt.Errorf("disallowed RR type %s for answer", typeName)
 		}
-		if emptyTarget {
+		if emptyTarget || target == "." {
 			continue
 		}
 
