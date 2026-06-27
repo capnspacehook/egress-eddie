@@ -1129,8 +1129,8 @@ func newGenericCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			// validate that either the source or destination IP is allowed
-			if f.validateIPs(src, dst) {
+			// validate that the destination IP is allowed
+			if f.allowedIPs.Exists(dst) {
 				logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
 				return acceptVerdict
 			}
@@ -1147,12 +1147,6 @@ func newGenericCallback(f *filter) hookCreator {
 
 		return newHookFunc(logger, e, createCallback(logger, ipv6))
 	}
-}
-
-func (f *filter) validateIPs(src, dst netip.Addr) bool {
-	// check if the destination IP is allowed first, as most likely
-	// we are validating an outbound connection
-	return f.allowedIPs.Exists(dst) || f.allowedIPs.Exists(src)
 }
 
 func qClassToString(qClass uint16) string {

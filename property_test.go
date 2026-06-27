@@ -233,12 +233,7 @@ func testFilterState(t *rapid.T) {
 
 				src := genTrafficIP(t, m, ipv6, "src")
 				dst := genTrafficIP(t, m, ipv6, "dst")
-
-				// the traffic callback ignores conntrack state and ports;
-				// accept iff the src or dst IP is currently allowed.
-				_, srcAllowed := m.allowedIPs[src]
-				_, dstAllowed := m.allowedIPs[dst]
-				accept := srcAllowed || dstAllowed
+				_, accept := m.allowedIPs[dst]
 
 				packet := buildTrafficPacket(t, ipv6, src, dst)
 				v, gotV := d.deliver(queue, drawConnState(t), packet)
