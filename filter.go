@@ -38,6 +38,16 @@ const (
 	dnsQueryTimeout = time.Minute
 )
 
+var allowedRRTypes = []uint16{
+	dns.TypeA,
+	dns.TypeAAAA,
+	dns.TypeCNAME,
+	dns.TypeSRV,
+	dns.TypeHTTPS,
+	dns.TypeSVCB,
+	dns.TypeMX,
+}
+
 type FilterManager struct {
 	signaler *signaler
 
@@ -637,6 +647,13 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
 	}
 
 	q := dnsMsg.Question[0]
+	if q.Qclass != dns.ClassINET {
+		return fmt.Errorf("question class %s is not INET", qClassToString(q.Qclass))
+	}
+	if !slices.Contains(allowedRRTypes, q.Qtype) {
+		return fmt.Errorf("question type %s is not allowed", rrTypeToString(q.Qtype))
+	}
+
 	ok, err := f.validateDNSName(q.Qtype, q.Name)
 	if err != nil {
 		return fmt.Errorf("validating domain name %q in question: %w", q.Name, err)
@@ -677,6 +694,10 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 
 	for _, a := range dnsMsg.Answer {
 		h := a.Header()
+
+		if h.Class != dns.ClassINET {
+			return fmt.Errorf("answer RR class %s is not INET", qClassToString(h.Class))
+		}
 
 		// if the owner name is a target from a previous allowed RR it's
 		// safe to allow it
@@ -730,14 +751,6 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 	}
 
 	return nil
-}
-
-func rrTypeToString(rrType uint16) string {
-	typeName, ok := dns.TypeToString[rrType]
-	if ok {
-		return typeName
-	}
-	return "unknown-" + strconv.Itoa(int(rrType))
 }
 
 func (f *filter) validateDNSName(qtype uint16, name string) (bool, error) {
@@ -1140,6 +1153,22 @@ func (f *filter) validateIPs(src, dst netip.Addr) bool {
 	// check if the destination IP is allowed first, as most likely
 	// we are validating an outbound connection
 	return f.allowedIPs.Exists(dst) || f.allowedIPs.Exists(src)
+}
+
+func qClassToString(qClass uint16) string {
+	className, ok := dns.ClassToString[qClass]
+	if ok {
+		return className
+	}
+	return "unknown-" + strconv.Itoa(int(qClass))
+}
+
+func rrTypeToString(rrType uint16) string {
+	typeName, ok := dns.TypeToString[rrType]
+	if ok {
+		return typeName
+	}
+	return "unknown-" + strconv.Itoa(int(rrType))
 }
 
 func (f *filter) dropReasonFields(reason error, dnsMsg *dns.Msg) []zap.Field {
