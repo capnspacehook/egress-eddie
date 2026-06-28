@@ -126,7 +126,7 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 		seccomp.PerArg{
 			seccomp.AnyValue{},
 			seccomp.AnyValue{},
-			seccomp.EqualTo(unix.MSG_PEEK),
+			seccomp.EqualTo(unix.MSG_PEEK | unix.MSG_TRUNC),
 		},
 	},
 	unix.SYS_RESTART_SYSCALL:   seccomp.MatchAll{},
@@ -199,8 +199,9 @@ var networkSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 
 type nullEmitter struct{}
 
-func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...interface{}) {
-}
+func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...interface{}) {}
+
+const violationAction = seccomp.KillProcess
 
 func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error) {
 	// only allow Egress Eddie to make outbound connections if DNS
@@ -213,5 +214,22 @@ func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error
 	// disable logging from seccomp package
 	log.SetTarget(&nullEmitter{})
 
-	return allowedSyscalls.Size(), seccomp.Install(allowedSyscalls, seccomp.DenyNewExecMappings, seccomp.DefaultProgramOptions())
+	p := &seccomp.Program{
+		RuleSets: []seccomp.RuleSet{
+			{
+				Rules:  seccomp.DenyNewExecMappings,
+				Action: violationAction,
+			},
+			{
+				Rules:  allowedSyscalls,
+				Action: seccomp.Allow,
+			},
+		},
+		Options: seccomp.ProgramOptions{
+			DefaultAction: violationAction,
+			BadArchAction: violationAction,
+		},
+	}
+
+	return allowedSyscalls.Size(), p.Install()
 }
