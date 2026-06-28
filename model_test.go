@@ -14,10 +14,7 @@ import (
 // (a counting cache: repeated requests on the same connID increment count and
 // keep the FIRST stored value).
 type storedReq struct {
-	id     uint16
-	qname  string
-	qtype  uint16
-	qclass uint16
+	requestInfo
 	count  int       // counting-cache count (0 == one outstanding)
 	expiry time.Time // now + propConnTimeout, refreshed on each Add
 }
@@ -103,10 +100,12 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 	}
 
 	m.pending[connID] = &storedReq{
-		id:     msg.Id,
-		qname:  q.Name,
-		qtype:  q.Qtype,
-		qclass: q.Qclass,
+		requestInfo: requestInfo{
+			id:     msg.Id,
+			qName:  q.Name,
+			qType:  q.Qtype,
+			qClass: q.Qclass,
+		},
 		count:  0,
 		expiry: dl,
 	}

@@ -38,6 +38,8 @@ const (
 	dnsQueryTimeout = time.Minute
 )
 
+// this must be kept up to date with the type switches in
+// validateDNSAnswers and newDNSResponseCallback
 var allowedRRTypes = []uint16{
 	dns.TypeA,
 	dns.TypeAAAA,
@@ -85,7 +87,7 @@ type filter struct {
 
 	res resolver
 
-	connections       *timedcache.TimedCache[connectionID, *dns.Msg]
+	connections       *timedcache.TimedCache[connectionID, requestInfo]
 	allowedIPs        *timedcache.TimedCache[netip.Addr, struct{}]
 	additionalDomains *timedcache.TimedCache[string, struct{}]
 
@@ -135,6 +137,13 @@ func (c connectionID) String() string {
 	b.WriteString(c.dst.String())
 
 	return b.String()
+}
+
+type requestInfo struct {
+	id     uint16
+	qName  string
+	qType  uint16
+	qClass uint16
 }
 
 // enforcer sets verdicts on packets.
@@ -259,7 +268,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
 		res:             res,
-		connections:     timedcache.New[connectionID, *dns.Msg](logger, true),
+		connections:     timedcache.New[connectionID, requestInfo](logger, true),
 		isSelfFilter:    isSelfFilter,
 	}
 
@@ -487,15 +496,15 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			}
 
 			if attr.PacketID == nil {
-				logger.Warn("got packet with no packet ID")
+				logger.Warn("ignoring packet with no packet ID")
 				return ignoreVerdict
 			}
 			if attr.CtInfo == nil {
-				logger.Warn("got packet with no connection state")
+				logger.Warn("dropping packet with no connection state")
 				return dropVerdict
 			}
 			if attr.Payload == nil {
-				logger.Warn("got packet with no payload")
+				logger.Warn("dropping packet with no payload")
 				return dropVerdict
 			}
 
@@ -507,16 +516,17 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 			dnsMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
 			if err != nil {
-				logger.Error("error parsing DNS packet", zap.Error(err))
+				fields := []zap.Field{zap.Error(err)}
 				if dnsMsg != nil {
-					logger.Info("offending DNS packet", dnsFields(dnsMsg, f.fullDNSLogging)...)
+					fields = append(fields, dnsFields(dnsMsg, f.fullDNSLogging)...)
 				}
+				logger.Error("error parsing DNS packet", fields...)
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
 			if dnsMsg.Opcode != dns.OpcodeQuery {
-				logger.Warn("dropping DNS response with non-query opcode", dnsFields(dnsMsg, f.fullDNSLogging)...)
+				logger.Warn("dropping DNS request with non-query opcode", dnsFields(dnsMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 			// drop DNS replies, they shouldn't be going to this filter
@@ -537,7 +547,14 @@ func newDNSRequestCallback(f *filter) hookCreator {
 			logger.Info("allowing DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
 
 			logger.Debug("adding connection")
-			f.connections.AddValue(connID, dnsMsg, dnsQueryTimeout)
+			q := dnsMsg.Question[0]
+			sr := requestInfo{
+				id:     dnsMsg.Id,
+				qName:  q.Name,
+				qType:  q.Qtype,
+				qClass: q.Qclass,
+			}
+			f.connections.AddValue(connID, sr, dnsQueryTimeout)
 
 			return acceptVerdict
 		}
@@ -665,23 +682,21 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
 	return nil
 }
 
-func (f *filter) compareDNSReqResp(req, resp *dns.Msg) error {
-	if req.Id != resp.Id {
+func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
+	if req.id != resp.Id {
 		return errors.New("request and response IDs do not match")
 	}
-
 	if len(resp.Question) == 0 {
 		return errors.New("no questions in DNS response")
 	}
 
 	// the response question should match the request's question
-	reqQ := req.Question[0]
 	respQ := resp.Question[0]
-	if reqQ.Qtype != respQ.Qtype {
+	if req.qType != respQ.Qtype {
 		return errors.New("request and response question types do not match")
-	} else if reqQ.Qclass != respQ.Qclass {
+	} else if req.qClass != respQ.Qclass {
 		return errors.New("request and response question classes do not match")
-	} else if !strings.EqualFold(reqQ.Name, respQ.Name) {
+	} else if !strings.EqualFold(req.qName, respQ.Name) {
 		return errors.New("request and response question names do not match")
 	}
 
@@ -712,6 +727,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		}
 
 		// ensure all target answers are allowed
+		// types here must match allowedRRTypes slice
 		var emptyTarget bool
 		var target string
 		switch answer := a.(type) {
@@ -913,15 +929,15 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			}
 
 			if attr.PacketID == nil {
-				logger.Warn("got packet with no packet ID")
+				logger.Warn("dropping packet with no packet ID")
 				return ignoreVerdict
 			}
 			if attr.CtInfo == nil {
-				logger.Warn("got packet with no connection state")
+				logger.Warn("dropping packet with no connection state")
 				return dropVerdict
 			}
 			if attr.Payload == nil {
-				logger.Warn("got packet with no payload")
+				logger.Warn("dropping packet with no payload")
 				return dropVerdict
 			}
 
@@ -937,20 +953,21 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 
 			respMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
 			if err != nil {
-				logger.Error("error parsing DNS packet", zap.Error(err))
+				fields := []zap.Field{zap.Error(err)}
 				if respMsg != nil {
-					logger.Info("offending DNS packet", dnsFields(respMsg, f.fullDNSLogging)...)
+					fields = append(fields, dnsFields(respMsg, f.fullDNSLogging)...)
 				}
+				logger.Error("error parsing DNS packet", fields...)
 				return dropVerdict
 			}
 			logger := logger.With(zap.Stringer("conn.id", connID))
 
 			var connFilter *filter
-			var reqMsg *dns.Msg
+			var reqInfo requestInfo
 			for _, filter := range f.filters {
-				if msg, ok := filter.connections.Lookup(connID); ok {
+				if ri, ok := filter.connections.Lookup(connID); ok {
 					connFilter = filter
-					reqMsg = msg
+					reqInfo = ri
 					break
 				}
 			}
@@ -969,14 +986,8 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return acceptVerdict
 			}
 
-			// validate DNS response questions are for allowed
-			// domains, drop them otherwise
-			if err := connFilter.validateDNSQuestion(respMsg); err != nil {
-				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
-				return dropVerdict
-			}
 			// confirm that the request and response ID and question matches
-			if err := connFilter.compareDNSReqResp(reqMsg, respMsg); err != nil {
+			if err := connFilter.compareDNSReqResp(reqInfo, respMsg); err != nil {
 				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
 				return dropVerdict
 			}
@@ -998,6 +1009,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			ttl := connFilter.opts.AllowAnswersFor
 			for _, a := range respMsg.Answer {
 				var target string
+				// types here must match allowedRRTypes slice
 				switch answer := a.(type) {
 				case *dns.A:
 					ip, ok := netip.AddrFromSlice(answer.A)

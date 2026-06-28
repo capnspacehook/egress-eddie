@@ -181,10 +181,12 @@ func testFilterState(t *rapid.T) {
 					msg, malformed = genResponseMsg(t, req)
 				} else {
 					msg, _ = genResponseMsg(t, &storedReq{
-						id:     uint16(rapid.IntRange(0, 0xffff).Draw(t, "randomID")),
-						qname:  dns.Fqdn(genBaseName(t)),
-						qtype:  dns.TypeA,
-						qclass: dns.ClassINET,
+						requestInfo: requestInfo{
+							id:     uint16(rapid.IntRange(0, 0xffff).Draw(t, "randomID")),
+							qName:  dns.Fqdn(genBaseName(t)),
+							qType:  dns.TypeA,
+							qClass: dns.ClassINET,
+						},
 					})
 					// we don't need to set malformed as if this isn't
 					// for a pending request this should always be dropped
@@ -318,13 +320,13 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 	}
 
 	q := dns.Question{
-		Qtype:  req.qtype,
-		Qclass: req.qclass,
+		Qtype:  req.qType,
+		Qclass: req.qClass,
 	}
 
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQType") == 0 {
 		q.Qtype = genQType(t)
-		if q.Qtype == dns.TypeTXT || q.Qtype != req.qtype {
+		if q.Qtype == dns.TypeTXT || q.Qtype != req.qType {
 			t.Log("mismatched QTypes")
 			malformed = true
 		}
@@ -333,16 +335,16 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 		baseName, badBaseName := genBaseNameClassified(t)
 		name, badName := genNameClassified(t, baseName, q.Qtype)
 		q.Name = dns.Fqdn(name)
-		if badBaseName || badName || !strings.EqualFold(q.Name, req.qname) {
+		if badBaseName || badName || !strings.EqualFold(q.Name, req.qName) {
 			t.Log("mismatched QNames")
 			malformed = true
 		}
 	} else {
-		q.Name = genCase(t, req.qname)
+		q.Name = genCase(t, req.qName)
 	}
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQClass") == 0 {
 		q.Qclass = genClass(t)
-		if q.Qclass != req.qclass {
+		if q.Qclass != req.qClass {
 			t.Log("mismatched QClasses")
 			malformed = true
 		}
@@ -350,7 +352,7 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 	msg.Question = []dns.Question{q}
 
 	n := rapid.IntRange(0, 3).Draw(t, "nAnswers")
-	owner := req.qname // first owner is the (correlated) question name
+	owner := req.qName // first owner is the (correlated) question name
 	for range n {
 		rr, badRR := genAnswerRRClassified(t, genCase(t, owner))
 		if badRR {

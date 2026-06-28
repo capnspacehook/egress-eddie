@@ -24,9 +24,6 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Install uv for hegel
-        uses: astral-sh/setup-uv@v8.1.0
-
       - name: Restore Go cache
         uses: capnspacehook/cache-go/restore@v2.0.1
 
@@ -36,7 +33,7 @@ jobs:
           go test -c -race -o egress-eddie.test
           sudo ./egress-eddie.test -enable-ipv6=false -test.timeout 5m -test.v -test.run TestIntegration
 
-          go test -race -timeout 1m -v ./...
+          go test -race -timeout 10m -v -rapid.checks 100_000 ./...
 
       - name: Save Go cache
         if: always()
@@ -97,8 +94,7 @@ jobs:
           cache-fuzz-corpus: true
 
       - run: |
-          go test -fuzz FuzzFilters -run Config -fuzztime 5m
-          go test -fuzz FuzzVerdicts -run Config -fuzztime 5m
+          go test -fuzz FuzzVerdicts -run N/A -fuzztime 10m
 
       - name: Save Go cache
         if: always()

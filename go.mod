@@ -13,7 +13,6 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/sys v0.41.0
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068
-	pgregory.net/rapid v1.3.0
 )
 
 // Test dependencies
@@ -21,6 +20,7 @@ require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be
 	github.com/matryer/is v1.4.1
 	go.uber.org/goleak v1.3.0
+	pgregory.net/rapid v1.3.0
 )
 
 require (
