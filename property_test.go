@@ -141,11 +141,11 @@ func testFilterState(t *rapid.T) {
 		t.Repeat(map[string]func(*rapid.T){
 			"dns request": func(t *rapid.T) {
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
-				port := rapid.SampledFrom(clientPorts).Draw(t, "port")
+				ep := drawEndpoint(t, ipv6)
 				connState := drawConnState(t)
 				msg, malformed := genRequestMsg(t)
 
-				packet, parsed, ok := buildDNSPacket(t, msg, ipv6, false, port)
+				packet, parsed, ok := buildDNSPacket(t, msg, ipv6, false, ep)
 				if !ok {
 					return
 				}
@@ -160,15 +160,15 @@ func testFilterState(t *rapid.T) {
 
 				// model the connection store on accept (counting cache).
 				if accept {
-					m.addPending(ipv6, port, parsed)
+					m.addPending(ep, parsed)
 				}
 				settleAndCheck()
 			},
 			"dns response": func(t *rapid.T) {
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
-				port := rapid.SampledFrom(clientPorts).Draw(t, "port")
+				ep := drawResponseEndpoint(t, m, ipv6)
 				connState := drawConnState(t)
-				connID := connIDFor(ipv6, port)
+				connID := ep.connID()
 
 				// Build a response; if there's an outstanding request for this
 				// connID, correlate to it (the generator may still inject a
@@ -190,7 +190,7 @@ func testFilterState(t *rapid.T) {
 					// for a pending request this should always be dropped
 				}
 
-				packet, parsed, ok := buildDNSPacket(t, msg, ipv6, true, port)
+				packet, parsed, ok := buildDNSPacket(t, msg, ipv6, true, ep)
 				if !ok {
 					return
 				}
@@ -265,7 +265,7 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 	msg.Opcode = dns.OpcodeQuery
 
 	malformed := true
-	switch rapid.IntRange(0, 9).Draw(t, "reqShape") {
+	switch rapid.IntRange(0, 10).Draw(t, "reqShape") {
 	case 0:
 		t.Log("no questions")
 	case 1:
@@ -284,6 +284,11 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 		q := genQuestion(t)
 		msg.Question = []dns.Question{q}
 		msg.Answer = []dns.RR{genAnswerRR(t, q.Name)}
+	case 5:
+		t.Log("authority records present")
+		q := genQuestion(t)
+		msg.Question = []dns.Question{q}
+		msg.Ns = genNoiseRRs(t, "reqNs")
 	default:
 		// well-formed single-question request
 		q, badQ := genQuestionClassified(t)
@@ -358,7 +363,43 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 		}
 	}
 
+	// The Authority and Additional sections must be ignored entirely;
+	// populate them with poisoned records so a regression that validates or
+	// acts on them surfaces as a verdict or cache divergence.
+	if rapid.IntRange(0, 2).Draw(t, "addAuthority") == 0 {
+		msg.Ns = genNoiseRRs(t, "ns")
+	}
+	if rapid.IntRange(0, 2).Draw(t, "addAdditional") == 0 {
+		msg.Extra = genNoiseRRs(t, "extra")
+	}
+
 	return msg, malformed
+}
+
+// genNoiseRRs draws records for the Authority (Ns) and Additional (Extra)
+// sections. Egress Eddie validates and acts on the Answer section only, so
+// these must be completely inert. They're built "poisoned" — a disallowed
+// owner plus an arbitrary IP or a disallowed target — so any regression that
+// starts validating or acting on these sections shows up as a verdict or
+// cache divergence.
+func genNoiseRRs(t *rapid.T, label string) []dns.RR {
+	n := rapid.IntRange(1, 2).Draw(t, label+"Count")
+	rrs := make([]dns.RR, 0, n)
+	for range n {
+		hdr := dns.RR_Header{Name: dns.Fqdn(disallowedDomain), Class: dns.ClassINET, Ttl: 60}
+		switch rapid.IntRange(0, 2).Draw(t, label+"Kind") {
+		case 0:
+			hdr.Rrtype = dns.TypeA
+			rrs = append(rrs, &dns.A{Hdr: hdr, A: GenIPv4Addr().Draw(t, label+"A").AsSlice()})
+		case 1:
+			hdr.Rrtype = dns.TypeAAAA
+			rrs = append(rrs, &dns.AAAA{Hdr: hdr, AAAA: GenIPv6Addr().Draw(t, label+"AAAA").AsSlice()})
+		default:
+			hdr.Rrtype = dns.TypeCNAME
+			rrs = append(rrs, &dns.CNAME{Hdr: hdr, Target: dns.Fqdn(disallowedDomain)})
+		}
+	}
+	return rrs
 }
 
 func genQuestion(t *rapid.T) dns.Question {
@@ -581,23 +622,73 @@ func genClass(t *rapid.T) uint16 {
 }
 
 var (
-	dnsServerV4 = netip.MustParseAddr("9.9.9.9")
-	dnsServerV6 = netip.MustParseAddr("2620:fe::fe")
-	clientV4    = netip.MustParseAddr("127.0.0.1")
-	clientV6    = netip.MustParseAddr("::1")
+	// Small pools of client and DNS-server addresses. Varying the server
+	// (and client) address — not just the port — exercises the full
+	// 5-tuple connID correlation: a reply from the wrong server, or to the
+	// wrong client, builds a different connID and must not match a pending
+	// request.
+	clientAddrs4 = []netip.Addr{netip.MustParseAddr("10.1.0.1"), netip.MustParseAddr("10.1.0.2")}
+	clientAddrs6 = []netip.Addr{netip.MustParseAddr("fd00:1::1"), netip.MustParseAddr("fd00:1::2")}
+	serverAddrs4 = []netip.Addr{netip.MustParseAddr("9.9.9.9"), netip.MustParseAddr("1.1.1.1")}
+	serverAddrs6 = []netip.Addr{netip.MustParseAddr("2620:fe::fe"), netip.MustParseAddr("2606:4700:4700::1111")}
 )
 
-// connIDFor builds the connID exactly as parseDNSPacket would. The connID is
-// always {clientAddr:clientPort, serverAddr:53} regardless of direction.
-func connIDFor(ipv6 bool, clientPort uint16) connectionID {
-	client, server := clientV4, dnsServerV4
+// endpoint identifies a modeled DNS connection by its client and server
+// addresses and the client port.
+type endpoint struct {
+	client netip.Addr
+	server netip.Addr
+	port   uint16
+}
+
+func drawEndpoint(t *rapid.T, ipv6 bool) endpoint {
+	clients, servers := clientAddrs4, serverAddrs4
 	if ipv6 {
-		client, server = clientV6, dnsServerV6
+		clients, servers = clientAddrs6, serverAddrs6
 	}
+	return endpoint{
+		client: rapid.SampledFrom(clients).Draw(t, "client"),
+		server: rapid.SampledFrom(servers).Draw(t, "server"),
+		port:   rapid.SampledFrom(clientPorts).Draw(t, "port"),
+	}
+}
+
+func (e endpoint) connID() connectionID {
 	return connectionID{
-		src: netip.AddrPortFrom(client, clientPort),
-		dst: netip.AddrPortFrom(server, 53),
+		src: netip.AddrPortFrom(e.client, e.port),
+		dst: netip.AddrPortFrom(e.server, 53),
 	}
+}
+
+// drawResponseEndpoint biases toward an outstanding pending connection (so
+// correlated replies, and the answer-chain / side-effect paths behind them,
+// stay well exercised across the larger endpoint space), but still draws a
+// fresh endpoint often enough to test that a reply on the wrong
+// client/server/port does not correlate.
+func drawResponseEndpoint(t *rapid.T, m *model, ipv6 bool) endpoint {
+	var pending []endpoint
+	for connID := range m.pending {
+		if connID.src.Addr().Is6() == ipv6 {
+			pending = append(pending, endpoint{
+				client: connID.src.Addr(),
+				server: connID.dst.Addr(),
+				port:   connID.src.Port(),
+			})
+		}
+	}
+	if len(pending) > 0 && rapid.Bool().Draw(t, "respFromPending") {
+		slices.SortFunc(pending, func(a, b endpoint) int {
+			if c := a.client.Compare(b.client); c != 0 {
+				return c
+			}
+			if c := a.server.Compare(b.server); c != 0 {
+				return c
+			}
+			return int(a.port) - int(b.port)
+		})
+		return rapid.SampledFrom(pending).Draw(t, "respEndpoint")
+	}
+	return drawEndpoint(t, ipv6)
 }
 
 // buf is safe to reuse as it's cleared before it's used for
@@ -612,7 +703,7 @@ var buf = gopacket.NewSerializeBuffer()
 // target round-trips to "."), so feeding the oracle the pre-pack struct would
 // produce spurious mismatches. Packets miekg can't pack/unpack are skipped
 // (ok == false) — crafting those is the byte-level fuzzer's job.
-func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, clientPort uint16) (packet []byte, parsed *dns.Msg, ok bool) {
+func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, ep endpoint) (packet []byte, parsed *dns.Msg, ok bool) {
 	payload, err := msg.Pack()
 	if err != nil {
 		return nil, nil, false
@@ -622,15 +713,11 @@ func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, clientPort ui
 		return nil, nil, false
 	}
 
-	client, server := clientV4, dnsServerV4
-	if ipv6 {
-		client, server = clientV6, dnsServerV6
-	}
-	srcIP, dstIP := client, server
-	srcPort, dstPort := clientPort, uint16(53)
+	srcIP, dstIP := ep.client, ep.server
+	srcPort, dstPort := ep.port, uint16(53)
 	if response {
-		srcIP, dstIP = server, client
-		srcPort, dstPort = 53, clientPort
+		srcIP, dstIP = ep.server, ep.client
+		srcPort, dstPort = 53, ep.port
 	}
 
 	var ipLayer gopacket.SerializableLayer

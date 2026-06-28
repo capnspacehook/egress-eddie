@@ -10,8 +10,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// TODO: make flag
 const debugLogging = false
 
+// FuzzVerdicts sends random packet bytes to all filters (DNS request,
+// response and traffic) and verifies that the filters never panic and
+// always return an accept or drop verdict.
 func FuzzVerdicts(f *testing.F) {
 	packetDir := filepath.Join("testdata", "dnsPackets")
 	entries, err := os.ReadDir(packetDir)
@@ -68,7 +72,7 @@ allowedDomains = [
 	config.enforcerCreator = newMockEnforcer
 	config.resolver = &mockResolver{}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(f.Context())
 	f.Cleanup(cancel)
 
 	filters, err := CreateFilters(ctx, logger, config, false)
@@ -86,13 +90,25 @@ allowedDomains = [
 
 	packetID := uint32(1)
 	f.Fuzz(func(t *testing.T, packet []byte, connState uint8) {
-		for _, queue := range dnsQueues {
-			debugLog(logger, "sending packet to queue %d", queue)
+		allowedIPsLen := filters.filters[0].allowedIPs.Len()
+		additionalDomainsLen := filters.filters[0].additionalDomains.Len()
+
+		for i, queue := range dnsQueues {
 			mockEnforcers[queue].hook(nfqueue.Attribute{
 				PacketID: ref(packetID),
 				CtInfo:   ref(uint32(connState)),
 				Payload:  ref(packet),
 			})
+
+			// DNS request filters should never add IPs or domains
+			if i < 2 {
+				if filters.filters[0].allowedIPs.Len() > allowedIPsLen {
+					t.Errorf("queue %d added an IP", queue)
+				}
+				if filters.filters[0].additionalDomains.Len() > additionalDomainsLen {
+					t.Errorf("queue %d added a domain", queue)
+				}
+			}
 
 			verdict, ok := mockEnforcers[queue].verdicts[packetID]
 			if !ok {
@@ -105,12 +121,6 @@ allowedDomains = [
 			delete(mockEnforcers[queue].verdicts, packetID)
 		}
 	})
-}
-
-func debugLog(logger *zap.Logger, format string, a ...any) {
-	if debugLogging {
-		logger.Sugar().Infof(format, a...)
-	}
 }
 
 func ref[T any](t T) *T {

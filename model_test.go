@@ -62,7 +62,6 @@ func (m *model) prune() {
 }
 
 func (m *model) assertCaches(t *rapid.T, f *filter) {
-	// allowedIPs: bijection between model and real cache.
 	if got := f.allowedIPs.Len(); got != len(m.allowedIPs) {
 		t.Fatalf("allowedIPs size: model=%d real=%d", len(m.allowedIPs), got)
 	}
@@ -71,7 +70,7 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 			t.Fatalf("allowedIPs missing modeled IP %s", ip)
 		}
 	}
-	// additionalDomains: bijection.
+
 	if got := f.additionalDomains.Len(); got != len(m.additionalDoms) {
 		t.Fatalf("additionalDomains size: model=%d real=%d", len(m.additionalDoms), got)
 	}
@@ -80,7 +79,7 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 			t.Fatalf("additionalDomains missing modeled domain %q", dom)
 		}
 	}
-	// connections: bijection.
+
 	if got := f.connections.Len(); got != len(m.pending) {
 		t.Fatalf("connections size: model=%d real=%d", len(m.pending), got)
 	}
@@ -93,8 +92,8 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 
 // addPending models f.connections.AddValue (counting cache: first value wins,
 // count increments, deadline refreshes).
-func (m *model) addPending(ipv6 bool, port uint16, msg *dns.Msg) {
-	connID := connIDFor(ipv6, port)
+func (m *model) addPending(ep endpoint, msg *dns.Msg) {
+	connID := ep.connID()
 	q := msg.Question[0]
 	dl := m.now().Add(propConnTimeout)
 	if r, ok := m.pending[connID]; ok {
@@ -102,6 +101,7 @@ func (m *model) addPending(ipv6 bool, port uint16, msg *dns.Msg) {
 		r.expiry = dl
 		return
 	}
+
 	m.pending[connID] = &storedReq{
 		id:     msg.Id,
 		qname:  q.Name,
@@ -118,6 +118,7 @@ func (m *model) removePending(connID connectionID) {
 	if !ok {
 		return
 	}
+
 	if r.count != 0 {
 		r.count--
 		return
@@ -125,10 +126,17 @@ func (m *model) removePending(connID connectionID) {
 	delete(m.pending, connID)
 }
 
-func norm(name string) string { return strings.ToLower(strings.TrimSuffix(name, ".")) }
+func norm(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
 
-func inAllowedDomains(name string) bool { return norm(name) == allowedDomain }
-func inAllowedTargets(name string) bool { return norm(name) == allowedTarget }
+func inAllowedDomains(name string) bool {
+	return norm(name) == allowedDomain
+}
+
+func inAllowedTargets(name string) bool {
+	return norm(name) == allowedTarget
+}
 
 // domainAllowed mirrors (*filter).domainAllowed for a question/owner name.
 func (m *model) domainAllowed(name string) bool {
