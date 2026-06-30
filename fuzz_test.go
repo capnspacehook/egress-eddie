@@ -75,7 +75,7 @@ allowedDomains = [
 	ctx, cancel := context.WithCancel(f.Context())
 	f.Cleanup(cancel)
 
-	filters, err := CreateFilters(ctx, logger, config, false)
+	filters, err := CreateFilters(ctx, logger, config, false, true)
 	if err != nil {
 		f.Fatalf("error creating filters: %v", err)
 	}

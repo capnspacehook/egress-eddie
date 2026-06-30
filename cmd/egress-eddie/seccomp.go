@@ -126,6 +126,11 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 		seccomp.PerArg{
 			seccomp.AnyValue{},
 			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.MSG_PEEK),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.AnyValue{},
 			seccomp.EqualTo(unix.MSG_PEEK | unix.MSG_TRUNC),
 		},
 	},

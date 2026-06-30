@@ -55,6 +55,7 @@ type FilterManager struct {
 
 	started bool
 
+	permissiveMode bool
 	fullDNSLogging bool
 	logger         *zap.Logger
 
@@ -77,6 +78,7 @@ type filter struct {
 
 	opts *FilterOptions
 
+	permissiveMode bool
 	fullDNSLogging bool
 	logger         *zap.Logger
 
@@ -178,9 +180,10 @@ type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint
 
 // CreateFilters creates packet filters. The returned FilterManager can
 // be used to start or stop packet filtering.
-func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, fullDNSLogging bool) (*FilterManager, error) {
+func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, permissiveMode bool, fullDNSLogging bool) (*FilterManager, error) {
 	f := FilterManager{
 		signaler:       newSignaler(),
+		permissiveMode: permissiveMode,
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
 		queueNum4:      config.InboundDNSQueue.IPv4,
@@ -207,7 +210,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, full
 
 	for i := range config.Filters {
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
-		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, f.fullDNSLogging, newEnforcer, res)
+		filter, err := createFilter(ctx, logger, &config.Filters[i], isSelfFilter, f.permissiveMode, f.fullDNSLogging, newEnforcer, res)
 		if err != nil {
 			// TODO: stop other filters here
 			return nil, err
@@ -254,7 +257,7 @@ func (f *FilterManager) Stop() {
 	}
 }
 
-func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter, fullDNSLogging bool, newEnforcer enforcerCreator, res resolver) (*filter, error) {
+func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter, permissiveMode, fullDNSLogging bool, newEnforcer enforcerCreator, res resolver) (*filter, error) {
 	filterLogger := logger
 	if opts.Name != "" {
 		filterLogger = filterLogger.With(zap.String("filter.name", opts.Name))
@@ -265,6 +268,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		genericSignaler: newSignaler(),
 		cachingSignaler: newSignaler(),
 		opts:            opts,
+		permissiveMode:  permissiveMode,
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
 		res:             res,
@@ -563,9 +567,12 @@ func newDNSRequestCallback(f *filter) hookCreator {
 	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "dns-req"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		if f.permissiveMode {
+			logger = logger.With(zap.Bool("permissive", true))
+		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6))
+		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
 	}
 }
 
@@ -573,9 +580,12 @@ func connIsEstablished(state uint32) bool {
 	return state == stateEstablished || state == stateRelated || state == stateEstablishedReply || state == stateRelatedReply
 }
 
-func setVerdict(logger *zap.Logger, e enforcer, attr nfqueue.Attribute, v verdict) {
+func setVerdict(logger *zap.Logger, e enforcer, attr nfqueue.Attribute, v verdict, permissiveMode bool) {
 	if v == ignoreVerdict {
 		return
+	}
+	if permissiveMode {
+		v = nfqueue.NfAccept
 	}
 
 	if err := e.SetVerdict(*attr.PacketID, int(v)); err != nil {
@@ -908,10 +918,10 @@ func prepareDomainName(domain string) string {
 	return strings.ToLower(domain)
 }
 
-func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback) nfqueue.HookFunc {
+func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback, permissiveMode bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
 		v := callback(attr)
-		setVerdict(logger, e, attr, v)
+		setVerdict(logger, e, attr, v, permissiveMode)
 		return 0
 	}
 }
@@ -1060,9 +1070,12 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "dns-resp"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		if f.permissiveMode {
+			logger = logger.With(zap.Bool("permissive", true))
+		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6))
+		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
 	}
 }
 
@@ -1155,9 +1168,12 @@ func newGenericCallback(f *filter) hookCreator {
 	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "traffic"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		if f.permissiveMode {
+			logger = logger.With(zap.Bool("permissive", true))
+		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6))
+		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
 	}
 }
 

@@ -124,7 +124,7 @@ func testFilterState(t *rapid.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 
-		fm, err := CreateFilters(ctx, logger, config, false)
+		fm, err := CreateFilters(ctx, logger, config, false, false)
 		if err != nil {
 			t.Fatalf("creating filters: %v", err)
 		}

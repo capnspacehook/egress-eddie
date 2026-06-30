@@ -24,7 +24,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `
 Egress Eddie filters arbitrary outbound network traffic by domain names.
 
-	eddie-eddie [flags]
+	egress-eddie [flags]
 
 Egress Eddie filters DNS traffic and only allows requests and replies to
 specified domains. It then caches the IP addresses from allowed DNS replies
@@ -51,6 +51,7 @@ func main() {
 	debugLogs := flag.Bool("d", false, "enable debug logging")
 	logFullDNSPackets := flag.Bool("f", false, "enable full DNS packet logging")
 	logPath := flag.String("l", "stdout", "path to log to")
+	permissiveMode := flag.Bool("insecure-permissive", false, "enable permissive mode: all traffic will be allowed and packet decisions will be logged only")
 	validateConfig := flag.Bool("t", false, "validate the config and exit")
 	printVersion := flag.Bool("version", false, "print version and build information and exit")
 	flag.Parse()
@@ -118,7 +119,7 @@ func main() {
 			}
 		}
 
-		err = landlock.V1.RestrictPaths(
+		err = landlock.V9.BestEffort().RestrictPaths(
 			allowedPaths...,
 		)
 		if err != nil {
@@ -131,7 +132,7 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := egresseddie.CreateFilters(ctx, logger, config, *logFullDNSPackets)
+	filters, err := egresseddie.CreateFilters(ctx, logger, config, *permissiveMode, *logFullDNSPackets)
 	if err != nil {
 		logger.Fatal("error starting filters", zap.NamedError("error", err))
 	}

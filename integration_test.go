@@ -294,7 +294,7 @@ allowedDomains = [
 		initMockEnforcers()
 
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := CreateFilters(ctx, zap.NewNop(), config, false)
+		f, err := CreateFilters(ctx, zap.NewNop(), config, false, false)
 		is.NoErr(err)
 		t.Cleanup(func() {
 			cancel()
@@ -341,7 +341,7 @@ allowedDomains = [
 		// use real nfqueues
 		config.enforcerCreator = nil
 		ctx, cancel := context.WithCancel(context.Background())
-		f, err := CreateFilters(ctx, zap.NewNop(), config, false)
+		f, err := CreateFilters(ctx, zap.NewNop(), config, false, false)
 		is.NoErr(err)
 
 		cancel()
@@ -473,7 +473,7 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6table
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	filters, err := CreateFilters(ctx, logger, config, true)
+	filters, err := CreateFilters(ctx, logger, config, false, true)
 	if err != nil {
 		t.Fatalf("error starting filters: %v", err)
 	}
