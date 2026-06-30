@@ -1,5 +1,8 @@
 package egresseddie
 
+// NOTE: This file is mostly AI generated and was cleaned up and
+// reviewed by a human.
+
 import (
 	"net/netip"
 	"slices"

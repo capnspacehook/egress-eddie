@@ -10,6 +10,9 @@ on:
 
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   race-test:
     runs-on: ubuntu-latest
@@ -19,13 +22,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v6.3.0
+        uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go cache
-        uses: capnspacehook/cache-go/restore@v2.0.1
+        uses: capnspacehook/cache-go/restore@v2.0.2
 
       # the test is compiled and run as root so that egress eddie can
       # open nfqueues, which is a privileged operation
@@ -37,7 +40,7 @@ jobs:
 
       - name: Save Go cache
         if: always()
-        uses: capnspacehook/cache-go/save@v2.0.1
+        uses: capnspacehook/cache-go/save@v2.0.2
 
   binary-test:
     runs-on: ubuntu-latest
@@ -47,13 +50,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v6.3.0
+        uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go cache
-        uses: capnspacehook/cache-go/restore@v2.0.1
+        uses: capnspacehook/cache-go/restore@v2.0.2
 
       # run the same tests as above but use a binary to process packets
       # to test with landlock and seccomp filters active
@@ -73,7 +76,7 @@ jobs:
 
       - name: Save Go cache
         if: always()
-        uses: capnspacehook/cache-go/save@v2.0.1
+        uses: capnspacehook/cache-go/save@v2.0.2
 
   fuzz:
     runs-on: ubuntu-latest
@@ -83,13 +86,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Go
-        uses: actions/setup-go@v6.3.0
+        uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Restore Go cache
-        uses: capnspacehook/cache-go/restore@v2.0.1
+        uses: capnspacehook/cache-go/restore@v2.0.2
         with:
           cache-fuzz-corpus: true
 
@@ -98,6 +101,6 @@ jobs:
 
       - name: Save Go cache
         if: always()
-        uses: capnspacehook/cache-go/save@v2.0.1
+        uses: capnspacehook/cache-go/save@v2.0.2
         with:
           cache-fuzz-corpus: true
