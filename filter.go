@@ -527,7 +527,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				logger.Error("error parsing DNS packet", fields...)
 				return dropVerdict
 			}
-			logger := logger.With(zap.Stringer("conn.id", connID))
+			logger := logger.With(zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
 
 			if dnsMsg.Opcode != dns.OpcodeQuery {
 				logger.Warn("dropping DNS request with non-query opcode", dnsFields(dnsMsg, f.fullDNSLogging)...)
@@ -970,7 +970,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				logger.Error("error parsing DNS packet", fields...)
 				return dropVerdict
 			}
-			logger := logger.With(zap.Stringer("conn.id", connID))
+			logger := logger.With(zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
 
 			var connFilter *filter
 			var reqInfo requestInfo
