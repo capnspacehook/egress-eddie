@@ -12,11 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/florianl/go-nfqueue"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"github.com/mdlayher/netlink"
-	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
@@ -541,23 +542,17 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
+			var sr requestInfo
 			if !f.opts.AllowAllDomains {
-				if err := f.validateDNSQuestion(dnsMsg); err != nil {
+				sr, err = f.validateDNSQuestion(dnsMsg)
+				if err != nil {
 					logger.Warn("dropping DNS request", f.dropReasonFields(err, dnsMsg)...)
 					return dropVerdict
 				}
 			}
 
 			logger.Info("allowing DNS request", dnsFields(dnsMsg, f.fullDNSLogging)...)
-
 			logger.Debug("adding connection")
-			q := dnsMsg.Question[0]
-			sr := requestInfo{
-				id:     dnsMsg.Id,
-				qName:  q.Name,
-				qType:  q.Qtype,
-				qClass: q.Qclass,
-			}
 			f.connections.AddValue(connID, sr, dnsQueryTimeout)
 
 			return acceptVerdict
@@ -621,7 +616,8 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])
 	}
 
-	if err := dnsMsg.Unpack(udp.Payload); err != nil {
+	dnsMsg.Data = udp.Payload
+	if err := dnsMsg.Unpack(); err != nil {
 		return nil, connectionID{}, fmt.Errorf("decoding DNS message: %w", err)
 	}
 
@@ -661,39 +657,50 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 	return &dnsMsg, connID, nil
 }
 
-func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) error {
+func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (requestInfo, error) {
 	if len(dnsMsg.Question) == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		return errors.New("no questions in DNS request")
+		return requestInfo{}, errors.New("no questions in DNS request")
 	} else if len(dnsMsg.Question) > 1 {
 		// drop DNS requests with more than one question; this is
 		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
-		return fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
+		return requestInfo{}, fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
 	}
 
 	q := dnsMsg.Question[0]
-	if q.Qclass != dns.ClassINET {
-		return fmt.Errorf("question class %s is not INET", qClassToString(q.Qclass))
-	}
-	if !slices.Contains(allowedRRTypes, q.Qtype) {
-		return fmt.Errorf("question type %s is not allowed", rrTypeToString(q.Qtype))
+	h := q.Header()
+	if h == nil {
+		return requestInfo{}, fmt.Errorf("question header is nil")
 	}
 
-	ok, err := f.validateDNSName(q.Qtype, q.Name)
+	if h.Class != dns.ClassINET {
+		return requestInfo{}, fmt.Errorf("question class %s is not INET", qClassToString(h.Class))
+	}
+	qType := dns.RRToType(q)
+	if !slices.Contains(allowedRRTypes, qType) {
+		return requestInfo{}, fmt.Errorf("question type %s is not allowed", rrTypeToString(qType))
+	}
+
+	ok, err := f.validateDNSName(qType, h.Name)
 	if err != nil {
-		return fmt.Errorf("validating domain name %q in question: %w", q.Name, err)
+		return requestInfo{}, fmt.Errorf("validating domain name %q in question: %w", h.Name, err)
 	}
 	if !ok {
-		return fmt.Errorf("domain name %q in question is not allowed", q.Name)
+		return requestInfo{}, fmt.Errorf("domain name %q in question is not allowed", h.Name)
 	}
 
-	return nil
+	return requestInfo{
+		id:     dnsMsg.ID,
+		qName:  h.Name,
+		qType:  qType,
+		qClass: h.Class,
+	}, nil
 }
 
 func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
-	if req.id != resp.Id {
+	if req.id != resp.ID {
 		return errors.New("request and response IDs do not match")
 	}
 	if len(resp.Question) == 0 {
@@ -702,11 +709,17 @@ func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
 
 	// the response question should match the request's question
 	respQ := resp.Question[0]
-	if req.qType != respQ.Qtype {
+	respQHdr := respQ.Header()
+	if respQHdr == nil {
+		return fmt.Errorf("response question header is nil")
+	}
+	qType := dns.RRToType(respQ)
+
+	if req.qType != qType {
 		return errors.New("request and response question types do not match")
-	} else if req.qClass != respQ.Qclass {
+	} else if req.qClass != respQHdr.Class {
 		return errors.New("request and response question classes do not match")
-	} else if !strings.EqualFold(req.qName, respQ.Name) {
+	} else if !strings.EqualFold(req.qName, respQHdr.Name) {
 		return errors.New("request and response question names do not match")
 	}
 
@@ -714,25 +727,28 @@ func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
 }
 
 func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
-	q := dnsMsg.Question[0]
 	var allowedTargets []string
 
 	for _, a := range dnsMsg.Answer {
 		h := a.Header()
+		if h == nil {
+			return fmt.Errorf("answer header is nil")
+		}
 
 		if h.Class != dns.ClassINET {
 			return fmt.Errorf("answer RR class %s is not INET", qClassToString(h.Class))
 		}
+		rrType := dns.RRToType(a)
 
 		// if the owner name is a target from a previous allowed RR it's
 		// safe to allow it
 		if !slices.Contains(allowedTargets, prepareDomainName(h.Name)) {
-			ok, err := f.validateDNSName(q.Qtype, h.Name)
+			ok, err := f.validateDNSName(rrType, h.Name)
 			if err != nil {
-				return fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(h.Rrtype), err)
+				return fmt.Errorf("validating owner domain name %q in answer of RR type %s: %w", h.Name, rrTypeToString(rrType), err)
 			}
 			if !ok {
-				return fmt.Errorf("owner domain name %q in answer of RR type %s is not allowed", h.Name, rrTypeToString(h.Rrtype))
+				return fmt.Errorf("owner domain name %q in answer of RR type %s is not allowed", h.Name, rrTypeToString(rrType))
 			}
 		}
 
@@ -742,8 +758,14 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		var target string
 		switch answer := a.(type) {
 		case *dns.A:
+			if !answer.Addr.Is4() {
+				return fmt.Errorf("IP address %s in A answer is not an IPv4 address", answer.Addr)
+			}
 			emptyTarget = true
 		case *dns.AAAA:
+			if !answer.Addr.Is6() {
+				return fmt.Errorf("IP address %s in AAAA answer is not an IPv6 address", answer.Addr)
+			}
 			emptyTarget = true
 		case *dns.CNAME:
 			target = answer.Target
@@ -756,11 +778,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		case *dns.MX:
 			target = answer.Mx
 		default:
-			typeName, ok := dns.TypeToString[h.Rrtype]
-			if !ok {
-				typeName = "unknown-" + strconv.Itoa(int(h.Rrtype))
-			}
-			return fmt.Errorf("disallowed RR type %s for answer", typeName)
+			return fmt.Errorf("disallowed RR type %s for answer", rrTypeToString(rrType))
 		}
 		if emptyTarget || target == "." {
 			continue
@@ -768,7 +786,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 
 		ok, err := f.targetAllowed(target)
 		if err != nil {
-			return fmt.Errorf("validating target %q in answer of RR type %s: %w", target, rrTypeToString(h.Rrtype), err)
+			return fmt.Errorf("validating target %q in answer of RR type %s: %w", target, rrTypeToString(rrType), err)
 		}
 		if !ok {
 			return fmt.Errorf("target domain name %q in answer is not allowed", target)
@@ -827,7 +845,7 @@ func stripPrefixLabels(domain string) (string, int) {
 		return domain, 0
 	}
 
-	idx, end := dns.NextLabel(domain, 0)
+	idx, end := dnsutil.Next(domain, 0)
 	if end {
 		return domain, 0
 	}
@@ -841,7 +859,7 @@ func stripPrefixLabels(domain string) (string, int) {
 			break
 		}
 
-		i, end := dns.NextLabel(domain, idx)
+		i, end := dnsutil.Next(domain, idx)
 		if end {
 			break
 		}
@@ -1022,25 +1040,16 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				// types here must match allowedRRTypes slice
 				switch answer := a.(type) {
 				case *dns.A:
-					ip, ok := netip.AddrFromSlice(answer.A)
-					if !ok {
-						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
-						continue
-					}
-					connFilter.allowedIPs.Add(ip, ttl)
+					connFilter.allowedIPs.Add(answer.Addr, ttl)
 				case *dns.AAAA:
-					ip, ok := netip.AddrFromSlice(answer.AAAA)
-					if !ok {
-						logger.Error("error converting IP", zap.Stringer("answer.ip", ip))
-						continue
-					}
-					connFilter.allowedIPs.Add(ip, ttl)
+					addr := answer.Addr
+					connFilter.allowedIPs.Add(addr, ttl)
 
 					// If the IP address is an IPv4-mapped IPv6 address,
 					// add the unwrapped IPv4 address too. That is what
 					// will most likely be used.
-					if ip.Is4In6() {
-						connFilter.allowedIPs.Add(ip.Unmap(), ttl)
+					if addr.Is4In6() {
+						connFilter.allowedIPs.Add(addr.Unmap(), ttl)
 					}
 				case *dns.CNAME:
 					target = answer.Target

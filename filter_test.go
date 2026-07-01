@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"codeberg.org/miekg/dns"
 	"github.com/capnspacehook/glob"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
-	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"pgregory.net/rapid"
 
@@ -151,20 +151,11 @@ func testConnectionID(t *rapid.T) {
 		ipLayer = &ipv6Layer
 	}
 
-	dnsMsg := dns.Msg{
-		Question: []dns.Question{
-			{
-				Name:   "domain.com.",
-				Qtype:  dns.TypeA,
-				Qclass: dns.ClassINET,
-			},
-		},
-	}
-	dnsBytes, err := dnsMsg.Pack()
-	if err != nil {
+	dnsMsg := dns.NewMsg("domain.com.", dns.TypeA)
+	if err := dnsMsg.Pack(); err != nil {
 		t.Fatal(err)
 	}
-	payload := gopacket.Payload(dnsBytes)
+	payload := gopacket.Payload(dnsMsg.Data)
 
 	udpLayer := layers.UDP{
 		SrcPort: layers.UDPPort(srcPort),
@@ -175,7 +166,7 @@ func testConnectionID(t *rapid.T) {
 	opts := gopacket.SerializeOptions{
 		FixLengths: true,
 	}
-	err = gopacket.SerializeLayers(buf, opts, ipLayer, &udpLayer, payload)
+	err := gopacket.SerializeLayers(buf, opts, ipLayer, &udpLayer, payload)
 	if err != nil {
 		t.Skip()
 	}

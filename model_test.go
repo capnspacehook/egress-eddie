@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
 	"pgregory.net/rapid"
 )
 
@@ -95,6 +95,8 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 	connID := ep.connID()
 	q := msg.Question[0]
+	qHdr := q.Header()
+
 	dl := m.now().Add(propConnTimeout)
 	if r, ok := m.pending[connID]; ok {
 		r.count++
@@ -104,10 +106,10 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 
 	m.pending[connID] = &storedReq{
 		requestInfo: requestInfo{
-			id:     msg.Id,
-			qName:  q.Name,
-			qType:  q.Qtype,
-			qClass: q.Qclass,
+			id:     msg.ID,
+			qName:  qHdr.Name,
+			qType:  dns.RRToType(q),
+			qClass: qHdr.Class,
 		},
 		count:  0,
 		expiry: dl,
@@ -220,14 +222,16 @@ func wellFormedName(n string) bool {
 // single question name allowed?
 func (m *model) requestNameAllowed(msg *dns.Msg) bool {
 	q := msg.Question[0]
-	return m.validateName(q.Qtype, q.Name)
+
+	return m.validateName(dns.RRToType(q), q.Header().Name)
 }
 
 // responseConditionalAccept assumes an established connection with a correlated
 // outstanding request (gate passed): is the response allowed? Question
 // allowlist plus the in-order answer-chain validation.
 func (m *model) responseConditionalAccept(msg *dns.Msg) bool {
-	if len(msg.Question) != 1 || !m.validateName(msg.Question[0].Qtype, msg.Question[0].Name) {
+	q := msg.Question[0]
+	if len(msg.Question) != 1 || !m.validateName(dns.RRToType(q), q.Header().Name) {
 		return false
 	}
 	if len(msg.Answer) == 0 {
@@ -239,8 +243,7 @@ func (m *model) responseConditionalAccept(msg *dns.Msg) bool {
 // answersValid mirrors validateDNSAnswers, INCLUDING the in-order
 // allowedTargets accumulation. This is the heart of the chaining property.
 func (m *model) answersValid(msg *dns.Msg) bool {
-	qtype := msg.Question[0].Qtype // validateDNSAnswers validates owners against the question's qtype
-	var accumulated []string       // normalized targets allowed by earlier RRs
+	var accumulated []string // normalized targets allowed by earlier RRs
 
 	for _, a := range msg.Answer {
 		owner := norm(a.Header().Name)
@@ -249,7 +252,7 @@ func (m *model) answersValid(msg *dns.Msg) bool {
 		// otherwise it must be allowed as a question/owner name (with the
 		// same qtype-driven prefix rules the question uses).
 		if !slices.Contains(accumulated, owner) {
-			if !m.validateName(qtype, a.Header().Name) {
+			if !m.validateName(dns.RRToType(a), a.Header().Name) {
 				return false
 			}
 		}
@@ -281,15 +284,11 @@ func answerSideEffects(msg *dns.Msg) (addIPs []netip.Addr, addDoms []string) {
 	for _, a := range msg.Answer {
 		switch ans := a.(type) {
 		case *dns.A:
-			if ip, ok := netip.AddrFromSlice(ans.A); ok {
-				addIPs = append(addIPs, ip)
-			}
+			addIPs = append(addIPs, ans.Addr)
 		case *dns.AAAA:
-			if ip, ok := netip.AddrFromSlice(ans.AAAA); ok {
-				addIPs = append(addIPs, ip)
-				if ip.Is4In6() {
-					addIPs = append(addIPs, ip.Unmap())
-				}
+			addIPs = append(addIPs, ans.Addr)
+			if ans.Addr.Is4In6() {
+				addIPs = append(addIPs, ans.Addr.Unmap())
 			}
 		default:
 			if t, tb, _ := rrTarget(a); tb && t != "" && t != "." {

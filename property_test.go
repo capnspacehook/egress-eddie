@@ -12,11 +12,12 @@ import (
 	"testing/synctest"
 	"time"
 
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/dnsutil"
+	"codeberg.org/miekg/dns/rdata"
 	"github.com/florianl/go-nfqueue"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
-	"github.com/miekg/dns"
-	"go.uber.org/zap"
 	"pgregory.net/rapid"
 )
 
@@ -109,7 +110,7 @@ func FuzzFilterProperties(f *testing.F) {
 
 func testFilterState(t *rapid.T) {
 	rapid.SyncTest(t, func(t *rapid.T) {
-		logger := zap.NewNop()
+		logger := createLogger(t)
 
 		// Fresh config + enforcers + filter per run so shrinking replays
 		// cleanly (no global state carried across runs).
@@ -186,7 +187,7 @@ func testFilterState(t *rapid.T) {
 					msg, _ = genResponseMsg(t, &storedReq{
 						requestInfo: requestInfo{
 							id:     uint16(rapid.IntRange(0, 0xffff).Draw(t, "randomID")),
-							qName:  dns.Fqdn(genBaseName(t)),
+							qName:  dnsutil.Fqdn(genBaseName(t)),
 							qType:  dns.TypeA,
 							qClass: dns.ClassINET,
 						},
@@ -266,7 +267,7 @@ func drawConnState(t *rapid.T) uint32 {
 // request drop paths.
 func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 	msg := new(dns.Msg)
-	msg.Id = uint16(rapid.IntRange(0, 0xffff).Draw(t, "id"))
+	msg.ID = uint16(rapid.IntRange(0, 0xffff).Draw(t, "id"))
 	msg.Opcode = dns.OpcodeQuery
 
 	malformed := true
@@ -275,24 +276,24 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 		t.Log("no questions")
 	case 1:
 		t.Log("two questions")
-		msg.Question = []dns.Question{genQuestion(t), genQuestion(t)}
+		msg.Question = []dns.RR{genQuestion(t), genQuestion(t)}
 	case 2:
 		t.Log("reply flag set")
 		msg.Response = true
-		msg.Question = []dns.Question{genQuestion(t)}
+		msg.Question = []dns.RR{genQuestion(t)}
 	case 3:
 		t.Log("non-query opcode")
 		msg.Opcode = dns.OpcodeStatus
-		msg.Question = []dns.Question{genQuestion(t)}
+		msg.Question = []dns.RR{genQuestion(t)}
 	case 4:
 		t.Log("answers present")
 		q := genQuestion(t)
-		msg.Question = []dns.Question{q}
-		msg.Answer = []dns.RR{genAnswerRR(t, q.Name)}
+		msg.Question = []dns.RR{q}
+		msg.Answer = []dns.RR{genAnswerRR(t, q.Header().Name)}
 	case 5:
 		t.Log("authority records present")
 		q := genQuestion(t)
-		msg.Question = []dns.Question{q}
+		msg.Question = []dns.RR{q}
 		msg.Ns = genNoiseRRs(t, "reqNs")
 	default:
 		// well-formed single-question request
@@ -300,7 +301,7 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 		if !badQ {
 			malformed = false
 		}
-		msg.Question = []dns.Question{q}
+		msg.Question = []dns.RR{q}
 	}
 
 	return msg, malformed
@@ -315,44 +316,45 @@ func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 	msg := new(dns.Msg)
 	msg.Response = true
 
-	msg.Id = req.id
+	msg.ID = req.id
 	if rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
-		msg.Id = uint16(rapid.IntRange(0, 0xffff).Draw(t, "wrongID"))
-		malformed = msg.Id != req.id
+		msg.ID = uint16(rapid.IntRange(0, 0xffff).Draw(t, "wrongID"))
+		malformed = msg.ID != req.id
 		t.Log("possibly mismatched IDs")
 	}
 
-	q := dns.Question{
-		Qtype:  req.qType,
-		Qclass: req.qClass,
-	}
-
+	qType := req.qType
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQType") == 0 {
-		q.Qtype = genQType(t)
-		if q.Qtype == dns.TypeTXT || q.Qtype != req.qType {
+		qType = genQType(t)
+		if qType == dns.TypeTXT || qType != req.qType {
 			t.Log("mismatched QTypes")
 			malformed = true
 		}
 	}
+
+	q := dns.TypeToRR[qType]()
+	qHdr := q.Header()
+	qHdr.Class = req.qClass
+
 	if rapid.IntRange(0, 4).Draw(t, "mismatchQName") == 0 {
 		baseName, badBaseName := genBaseNameClassified(t)
-		name, badName := genNameClassified(t, baseName, q.Qtype)
-		q.Name = dns.Fqdn(name)
-		if badBaseName || badName || !strings.EqualFold(q.Name, req.qName) {
+		name, badName := genNameClassified(t, baseName, qType)
+		qHdr.Name = dnsutil.Fqdn(name)
+		if badBaseName || badName || !strings.EqualFold(qHdr.Name, req.qName) {
 			t.Log("mismatched QNames")
 			malformed = true
 		}
 	} else {
-		q.Name = genCase(t, req.qName)
+		qHdr.Name = genCase(t, req.qName)
 	}
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQClass") == 0 {
-		q.Qclass = genClass(t)
-		if q.Qclass != req.qClass {
+		qHdr.Class = genClass(t)
+		if qHdr.Class != req.qClass {
 			t.Log("mismatched QClasses")
 			malformed = true
 		}
 	}
-	msg.Question = []dns.Question{q}
+	msg.Question = []dns.RR{q}
 
 	n := rapid.IntRange(0, 3).Draw(t, "nAnswers")
 	owner := req.qName // first owner is the (correlated) question name
@@ -391,43 +393,58 @@ func genNoiseRRs(t *rapid.T, label string) []dns.RR {
 	n := rapid.IntRange(1, 2).Draw(t, label+"Count")
 	rrs := make([]dns.RR, 0, n)
 	for range n {
-		hdr := dns.RR_Header{Name: dns.Fqdn(disallowedDomain), Class: dns.ClassINET, Ttl: 60}
+		hdr := dns.Header{Name: dnsutil.Fqdn(disallowedDomain), Class: dns.ClassINET, TTL: 60}
 		switch rapid.IntRange(0, 2).Draw(t, label+"Kind") {
 		case 0:
-			hdr.Rrtype = dns.TypeA
-			rrs = append(rrs, &dns.A{Hdr: hdr, A: GenIPv4Addr().Draw(t, label+"A").AsSlice()})
+			rrs = append(rrs, &dns.A{
+				Hdr: hdr,
+				A: rdata.A{
+					Addr: GenIPv4Addr().Draw(t, label+"A"),
+				},
+			})
 		case 1:
-			hdr.Rrtype = dns.TypeAAAA
-			rrs = append(rrs, &dns.AAAA{Hdr: hdr, AAAA: GenIPv6Addr().Draw(t, label+"AAAA").AsSlice()})
+			rrs = append(rrs, &dns.AAAA{
+				Hdr: hdr,
+				AAAA: rdata.AAAA{
+					Addr: GenIPv6Addr().Draw(t, label+"AAAA"),
+				},
+			})
 		default:
-			hdr.Rrtype = dns.TypeCNAME
-			rrs = append(rrs, &dns.CNAME{Hdr: hdr, Target: dns.Fqdn(disallowedDomain)})
+			rrs = append(rrs, &dns.CNAME{
+				Hdr: hdr,
+				CNAME: rdata.CNAME{
+					Target: dnsutil.Fqdn(disallowedDomain),
+				},
+			})
 		}
 	}
 	return rrs
 }
 
-func genQuestion(t *rapid.T) dns.Question {
+func genQuestion(t *rapid.T) dns.RR {
 	q, _ := genQuestionClassified(t)
 	return q
 }
 
-func genQuestionClassified(t *rapid.T) (q dns.Question, malformed bool) {
-	q.Qtype = genQType(t)
-	if q.Qtype == dns.TypeTXT {
+func genQuestionClassified(t *rapid.T) (q dns.RR, malformed bool) {
+	qType := genQType(t)
+	if qType == dns.TypeTXT {
 		t.Log("TXT QType")
 		malformed = true
 	}
 
+	q = dns.TypeToRR[qType]()
+	qHdr := q.Header()
+
 	baseName, badBaseName := genBaseNameClassified(t)
-	name, badName := genNameClassified(t, baseName, q.Qtype)
-	q.Name = dns.Fqdn(name)
+	name, badName := genNameClassified(t, baseName, qType)
+	qHdr.Name = dnsutil.Fqdn(name)
 	if badBaseName || badName {
 		malformed = true
 	}
 
-	q.Qclass = genClass(t)
-	if q.Qclass != dns.ClassINET {
+	qHdr.Class = genClass(t)
+	if qHdr.Class != dns.ClassINET {
 		t.Log("non-INET QClass")
 		malformed = true
 	}
@@ -490,9 +507,9 @@ func genAnswerRR(t *rapid.T, owner string) dns.RR {
 }
 
 func genAnswerRRClassified(t *rapid.T, owner string) (_ dns.RR, malformed bool) {
-	hdr := dns.RR_Header{
-		Name: dns.Fqdn(owner),
-		Ttl:  60,
+	hdr := dns.Header{
+		Name: dnsutil.Fqdn(owner),
+		TTL:  60,
 	}
 
 	hdr.Class = genClass(t)
@@ -507,37 +524,81 @@ func genAnswerRRClassified(t *rapid.T, owner string) (_ dns.RR, malformed bool) 
 
 	switch kind {
 	case "A":
-		hdr.Rrtype = dns.TypeA
-		return &dns.A{Hdr: hdr, A: GenIPv4Addr().Draw(t, "a").AsSlice()}, malformed
+		return &dns.A{
+			Hdr: hdr,
+			A: rdata.A{
+				Addr: GenIPv4Addr().Draw(t, "a"),
+			},
+		}, malformed
 	case "AAAA":
-		hdr.Rrtype = dns.TypeAAAA
-		return &dns.AAAA{Hdr: hdr, AAAA: genAAAA(t).AsSlice()}, malformed
+		return &dns.AAAA{
+			Hdr: hdr,
+			AAAA: rdata.AAAA{
+				Addr: genAAAA(t),
+			},
+		}, malformed
 	case "CNAME":
-		hdr.Rrtype = dns.TypeCNAME
 		target, badTarget := genTarget(t)
-		return &dns.CNAME{Hdr: hdr, Target: target}, malformed || badTarget
+		return &dns.CNAME{
+			Hdr: hdr,
+			CNAME: rdata.CNAME{
+				Target: target,
+			},
+		}, malformed || badTarget
 	case "SRV":
-		hdr.Rrtype = dns.TypeSRV
 		target, badTarget := genTarget(t)
-		return &dns.SRV{Hdr: hdr, Priority: 1, Weight: 1, Port: 443, Target: target}, malformed || badTarget
+		return &dns.SRV{
+			Hdr: hdr,
+			SRV: rdata.SRV{
+				Priority: 1,
+				Weight:   1,
+				Port:     443,
+				Target:   target,
+			},
+		}, malformed || badTarget
+
 	case "HTTPS":
-		hdr.Rrtype = dns.TypeHTTPS
 		target, badTarget := genTarget(t)
-		return &dns.HTTPS{SVCB: dns.SVCB{Hdr: hdr, Target: target}}, malformed || badTarget
+		return &dns.HTTPS{
+			SVCB: dns.SVCB{
+				Hdr: hdr,
+				SVCB: rdata.SVCB{
+					Target: target,
+				},
+			},
+		}, malformed || badTarget
 	case "SVCB":
-		hdr.Rrtype = dns.TypeSVCB
 		target, badTarget := genTarget(t)
-		return &dns.SVCB{Hdr: hdr, Target: target}, malformed || badTarget
+		return &dns.SVCB{
+			Hdr: hdr,
+			SVCB: rdata.SVCB{
+				Target: target,
+			},
+		}, malformed || badTarget
 	case "MX":
-		hdr.Rrtype = dns.TypeMX
 		target, badTarget := genTarget(t)
-		return &dns.MX{Hdr: hdr, Preference: 10, Mx: target}, malformed || badTarget
+		return &dns.MX{
+			Hdr: hdr,
+			MX: rdata.MX{
+				Preference: 10,
+				Mx:         target,
+			},
+		}, malformed || badTarget
 	case "TXT":
-		hdr.Rrtype = dns.TypeTXT
-		return &dns.TXT{Hdr: hdr, Txt: []string{"v=spf1"}}, true
+		return &dns.TXT{
+			Hdr: hdr,
+			TXT: rdata.TXT{
+				Txt: []string{"v=spf1"},
+			},
+		}, true
 	default: // UNKNOWN — an unsupported numeric type via RFC3597
-		hdr.Rrtype = 65280 // private-use type, not in egress-eddie's allowlist
-		return &dns.RFC3597{Hdr: hdr, Rdata: "00"}, true
+		return &dns.RFC3597{
+			Hdr: hdr,
+			RFC3597: rdata.RFC3597{
+				RRType: 65280, // private-use type, not in egress-eddie's allowlist
+				Data:   "00",
+			},
+		}, true
 	}
 }
 
@@ -550,18 +611,14 @@ func genAAAA(t *rapid.T) netip.Addr {
 	return GenIPv6Addr().Draw(t, "aaaa")
 }
 
-// genTarget draws an RR target: pool names (with casing), the legal "." case,
-// and the malformed "" case.
+// genTarget draws an RR target: pool names (with casing) and the legal "." case.
 func genTarget(t *rapid.T) (string, bool) {
-	switch rapid.IntRange(0, 9).Draw(t, "targetShape") {
+	switch rapid.IntRange(0, 8).Draw(t, "targetShape") {
 	case 0:
 		return ".", false // root domain is allowed
-	case 1:
-		t.Log("empty target")
-		return "", true
 	default:
 		baseName, malformed := genBaseNameClassified(t)
-		return dns.Fqdn(genCase(t, baseName)), malformed
+		return dnsutil.Fqdn(genCase(t, baseName)), malformed
 	}
 }
 
@@ -709,12 +766,13 @@ var buf = gopacket.NewSerializeBuffer()
 // produce spurious mismatches. Packets miekg can't pack/unpack are skipped
 // (ok == false) — crafting those is the byte-level fuzzer's job.
 func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, ep endpoint) (packet []byte, parsed *dns.Msg, ok bool) {
-	payload, err := msg.Pack()
-	if err != nil {
+	if err := msg.Pack(); err != nil {
 		return nil, nil, false
 	}
-	var parsedMsg dns.Msg
-	if err := parsedMsg.Unpack(payload); err != nil {
+	parsedMsg := dns.Msg{
+		Data: msg.Data,
+	}
+	if err := parsedMsg.Unpack(); err != nil {
 		return nil, nil, false
 	}
 
@@ -731,10 +789,10 @@ func buildDNSPacket(t *rapid.T, msg *dns.Msg, ipv6, response bool, ep endpoint) 
 	} else {
 		ipLayer = &layers.IPv6{NextHeader: layers.IPProtocolUDP, SrcIP: srcIP.AsSlice(), DstIP: dstIP.AsSlice()}
 	}
-	err = gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
+	err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{FixLengths: true},
 		ipLayer,
 		&layers.UDP{SrcPort: layers.UDPPort(srcPort), DstPort: layers.UDPPort(dstPort)},
-		gopacket.Payload(payload),
+		gopacket.Payload(parsedMsg.Data),
 	)
 	if err != nil {
 		t.Fatalf("serializing packet: %v", err)

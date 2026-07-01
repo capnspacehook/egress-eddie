@@ -6,6 +6,5 @@
 *.sh
 *.test
 
-.hegel/*
-
+egress-eddie
 ./cmd/egress-eddie/egress-eddie

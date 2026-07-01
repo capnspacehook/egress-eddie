@@ -1,9 +1,12 @@
 package egresseddie
 
 import (
+	"strconv"
 	"strings"
 
-	"github.com/miekg/dns"
+	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/deleg"
+	"codeberg.org/miekg/dns/svcb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -18,9 +21,9 @@ func dnsFields(dnsMsg *dns.Msg, fullDNSLogging bool) []zap.Field {
 
 	if fullDNSLogging {
 		fields = append(fields,
-			zap.Uint16("id", dnsMsg.Id),
+			zap.Uint16("id", dnsMsg.ID),
 			zap.Bool("qr", dnsMsg.Response),
-			zap.Uint8("opcode", uint8(dnsMsg.Opcode)),
+			zap.Uint8("opcode", dnsMsg.Opcode),
 		)
 		if dnsMsg.Authoritative {
 			flags = append(flags, "aa")
@@ -37,7 +40,7 @@ func dnsFields(dnsMsg *dns.Msg, fullDNSLogging bool) []zap.Field {
 		fields = append(fields, zap.Strings("flags", flags))
 
 		if dnsMsg.Response {
-			fields = append(fields, zap.Uint8("resp-code", uint8(dnsMsg.Rcode)))
+			fields = append(fields, zap.Uint16("resp-code", dnsMsg.Rcode))
 		}
 	}
 
@@ -49,12 +52,6 @@ func dnsFields(dnsMsg *dns.Msg, fullDNSLogging bool) []zap.Field {
 		if len(records) == 0 {
 			return
 		}
-		// skip additionals containing empty OPTs
-		if len(records) == 1 {
-			if opt, ok := records[0].(*dns.OPT); ok && len(opt.Option) == 0 {
-				return
-			}
-		}
 
 		fields = append(fields, zap.Array(key, dnsRecords(records)))
 	}
@@ -63,16 +60,22 @@ func dnsFields(dnsMsg *dns.Msg, fullDNSLogging bool) []zap.Field {
 	if fullDNSLogging {
 		stringify(dnsMsg.Ns, "authorities")
 		stringify(dnsMsg.Extra, "additionals")
+
+		// EDNS0 options live in their own pseudo section and are never
+		// present in Extra.
+		if len(dnsMsg.Pseudo) > 0 {
+			fields = append(fields, zap.Array("opts", dnsOpts(dnsMsg.Pseudo)))
+		}
 	}
 
 	return fields
 }
 
-type dnsQuestions []dns.Question
+type dnsQuestions []dns.RR
 
 func (q dnsQuestions) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range q {
-		if err := enc.AppendObject(dnsQuestion(q[i])); err != nil {
+		if err := enc.AppendObject(dnsQuestion{q[i]}); err != nil {
 			return err
 		}
 	}
@@ -80,12 +83,15 @@ func (q dnsQuestions) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-type dnsQuestion dns.Question
+type dnsQuestion struct {
+	dns.RR
+}
 
 func (q dnsQuestion) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddString("name", q.Name)
-	enc.AddString("class", strings.ToLower(dns.Class(q.Qclass).String()))
-	enc.AddString("type", strings.ToLower(dns.Type(q.Qtype).String()))
+	h := q.RR.Header()
+	enc.AddString("name", h.Name)
+	enc.AddString("class", strings.ToLower(qClassToString(h.Class)))
+	enc.AddString("type", strings.ToLower(rrTypeToString(dns.RRToType(q.RR))))
 	return nil
 }
 
@@ -112,27 +118,18 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 
 	switch rr := r.RR.(type) {
 	case *dns.A:
-		enc.AddString("ip", rr.A.String())
+		enc.AddString("ip", rr.Addr.String())
 	case *dns.AAAA:
-		enc.AddString("ip", rr.AAAA.String())
+		enc.AddString("ip", rr.Addr.String())
 	case *dns.AFSDB:
 		enc.AddUint16("subtype", rr.Subtype)
 		enc.AddString("hostname", rr.Hostname)
-	case *dns.AMTRELAY:
-		enc.AddUint8("precedence", rr.Precedence)
-		enc.AddUint8("gateway-type", rr.GatewayType)
-		enc.AddString("gateway-addr", rr.GatewayAddr.String())
-		enc.AddString("gateway-host", rr.GatewayHost)
 	case *dns.ANY:
-	case *dns.NXNAME:
-	case *dns.APL:
-		if err := enc.AddArray("prefixes", dnsAPLPrefixes(rr.Prefixes)); err != nil {
-			return err
-		}
 	case *dns.AVC:
 		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
 			return err
 		}
+	case *dns.AXFR:
 	case *dns.CAA:
 		enc.AddUint8("flag", rr.Flag)
 		enc.AddString("tag", rr.Tag)
@@ -152,12 +149,24 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("key-tag", rr.KeyTag)
 		enc.AddUint8("algorithm", rr.Algorithm)
 		enc.AddString("certificate", rr.Certificate)
+	case *dns.CLA:
+		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+			return err
+		}
 	case *dns.CNAME:
 		enc.AddString("name", rr.Target)
 	case *dns.CSYNC:
 		enc.AddUint32("serial", rr.Serial)
 		enc.AddUint16("flags", rr.Flags)
 		if err := enc.AddArray("type-bit-map", dnsTypeBitMap(rr.TypeBitMap)); err != nil {
+			return err
+		}
+	case *dns.DELEG:
+		if err := enc.AddArray("values", dnsDelegValues(rr.Value)); err != nil {
+			return err
+		}
+	case *dns.DELEGPARAM:
+		if err := enc.AddArray("values", dnsDelegValues(rr.Value)); err != nil {
 			return err
 		}
 	case *dns.DHCID:
@@ -179,6 +188,11 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint8("algorithm", rr.Algorithm)
 		enc.AddUint8("digest-type", rr.DigestType)
 		enc.AddString("digest", rr.Digest)
+	case *dns.DSYNC:
+		enc.AddUint16("notify-type", rr.Type)
+		enc.AddUint8("scheme", rr.Scheme)
+		enc.AddUint16("port", rr.Port)
+		enc.AddString("target", rr.Target)
 	case *dns.EID:
 		enc.AddString("endpoint", rr.Endpoint)
 	case *dns.EUI48:
@@ -209,16 +223,12 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		if err := enc.AddArray("values", dnsSVCBValues(rr.Value)); err != nil {
 			return err
 		}
-	case *dns.IPSECKEY:
-		enc.AddUint8("precedence", rr.Precedence)
-		enc.AddUint8("gateway-type", rr.GatewayType)
-		enc.AddUint8("algorithm", rr.Algorithm)
-		enc.AddString("gateway-addr", rr.GatewayAddr.String())
-		enc.AddString("gateway-host", rr.GatewayHost)
-		enc.AddString("public-key", rr.PublicKey)
+	case *dns.IPN:
+		enc.AddUint64("node", rr.Node)
 	case *dns.ISDN:
 		enc.AddString("address", rr.Address)
 		enc.AddString("sub-address", rr.SubAddress)
+	case *dns.IXFR:
 	case *dns.KEY:
 		enc.AddUint16("flags", rr.Flags)
 		enc.AddUint8("protocol", rr.Protocol)
@@ -303,7 +313,8 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint8("salt-length", rr.SaltLength)
 		enc.AddString("salt", rr.Salt)
 	case *dns.NULL:
-		enc.AddString("data", rr.Data)
+		enc.AddString("data", rr.Null)
+	case *dns.NXNAME:
 	case *dns.NXT:
 		enc.AddString("next-domain", rr.NextDomain)
 		if err := enc.AddArray("type-bit-map", dnsTypeBitMap(rr.TypeBitMap)); err != nil {
@@ -311,16 +322,18 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		}
 	case *dns.OPENPGPKEY:
 		enc.AddString("public-key", rr.PublicKey)
-	case *dns.OPT:
-		if err := enc.AddArray("opts", dnsOpts(rr.Option)); err != nil {
-			return err
-		}
 	case *dns.PTR:
 		enc.AddString("name", rr.Ptr)
 	case *dns.PX:
 		enc.AddUint16("preference", rr.Preference)
 		enc.AddString("map822", rr.Map822)
 		enc.AddString("mapx400", rr.Mapx400)
+	case *dns.RESINFO:
+		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+			return err
+		}
+	case *dns.RFC3597:
+		enc.AddString("rdata", rr.RFC3597.Data)
 	case *dns.RKEY:
 		enc.AddUint16("flags", rr.Flags)
 		enc.AddUint8("protocol", rr.Protocol)
@@ -333,7 +346,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("type-covered", rr.TypeCovered)
 		enc.AddUint8("algorithm", rr.Algorithm)
 		enc.AddUint8("labels", rr.Labels)
-		enc.AddUint32("orig-ttl", rr.OrigTtl)
+		enc.AddUint32("orig-ttl", rr.OrigTTL)
 		enc.AddUint32("expiration", rr.Expiration)
 		enc.AddUint32("inception", rr.Inception)
 		enc.AddUint16("key-tag", rr.KeyTag)
@@ -346,7 +359,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("type-covered", rr.TypeCovered)
 		enc.AddUint8("algorithm", rr.Algorithm)
 		enc.AddUint8("labels", rr.Labels)
-		enc.AddUint32("orig-ttl", rr.OrigTtl)
+		enc.AddUint32("orig-ttl", rr.OrigTTL)
 		enc.AddUint32("expiration", rr.Expiration)
 		enc.AddUint32("inception", rr.Inception)
 		enc.AddUint16("key-tag", rr.KeyTag)
@@ -413,7 +426,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("fudge", rr.Fudge)
 		enc.AddUint16("mac-size", rr.MACSize)
 		enc.AddString("mac", rr.MAC)
-		enc.AddUint16("orig-id", rr.OrigId)
+		enc.AddUint16("orig-id", rr.OrigID)
 		enc.AddUint16("error", rr.Error)
 		enc.AddUint16("other-len", rr.OtherLen)
 		enc.AddString("other-data", rr.OtherData)
@@ -429,6 +442,10 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("priority", rr.Priority)
 		enc.AddUint16("weight", rr.Weight)
 		enc.AddString("name", rr.Target)
+	case *dns.WALLET:
+		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+			return err
+		}
 	case *dns.X25:
 		enc.AddString("psdn-address", rr.PSDNAddress)
 	case *dns.ZONEMD:
@@ -436,43 +453,14 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint8("scheme", rr.Scheme)
 		enc.AddUint8("hash", rr.Hash)
 		enc.AddString("digest", rr.Digest)
-	case *dns.RESINFO:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
-			return err
-		}
-	case *dns.RFC3597:
-		enc.AddString("rdata", rr.Rdata)
-	case *dns.PrivateRR:
-		enc.AddString("data", rr.Data.String())
 	}
 
-	enc.AddString("type", strings.ToLower(dns.Type(r.Header().Rrtype).String()))
+	enc.AddString("type", strings.ToLower(rrTypeToString(dns.RRToType(r.RR))))
 
 	return nil
 }
 
-type dnsAPLPrefixes []dns.APLPrefix
-
-func (p dnsAPLPrefixes) MarshalLogArray(enc zapcore.ArrayEncoder) error {
-	for i := range p {
-		if err := enc.AppendObject(dnsAPLPrefix(p[i])); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-type dnsAPLPrefix dns.APLPrefix
-
-func (p dnsAPLPrefix) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddBool("negation", p.Negation)
-	enc.AddString("network", p.Network.String())
-
-	return nil
-}
-
-type dnsOpts []dns.EDNS0
+type dnsOpts []dns.RR
 
 func (o dnsOpts) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range o {
@@ -485,14 +473,25 @@ func (o dnsOpts) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 }
 
 type dnsOpt struct {
-	dns.EDNS0
+	dns.RR
 }
 
 func (o dnsOpt) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddUint16("code", o.Option())
+	var code uint16
+	if opt, ok := o.RR.(dns.EDNS0); ok {
+		code = dns.RRToCode(opt)
+	}
+	enc.AddString("code", strings.ToLower(ednsCodeToString(code)))
 	enc.AddString("data", o.String())
 
 	return nil
+}
+
+func ednsCodeToString(code uint16) string {
+	if codeName, ok := dns.CodeToString[code]; ok {
+		return codeName
+	}
+	return "unknown-" + strconv.Itoa(int(code))
 }
 
 type dnsStrings []string
@@ -505,7 +504,7 @@ func (s dnsStrings) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-type dnsSVCBValues []dns.SVCBKeyValue
+type dnsSVCBValues []svcb.Pair
 
 func (v dnsSVCBValues) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range v {
@@ -518,11 +517,34 @@ func (v dnsSVCBValues) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 }
 
 type dnsSVCBValue struct {
-	dns.SVCBKeyValue
+	svcb.Pair
 }
 
 func (v dnsSVCBValue) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddUint16("key", uint16(v.Key()))
+	enc.AddUint16("key", svcb.PairToKey(v.Pair))
+	enc.AddString("value", v.String())
+
+	return nil
+}
+
+type dnsDelegValues []deleg.Info
+
+func (v dnsDelegValues) MarshalLogArray(enc zapcore.ArrayEncoder) error {
+	for i := range v {
+		if err := enc.AppendObject(dnsDelegValue{v[i]}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type dnsDelegValue struct {
+	deleg.Info
+}
+
+func (v dnsDelegValue) MarshalLogObject(enc zapcore.ObjectEncoder) error {
+	enc.AddUint16("key", deleg.InfoToKey(v.Info))
 	enc.AddString("value", v.String())
 
 	return nil
@@ -544,7 +566,7 @@ type dnsTypeBitMap []uint16
 
 func (t dnsTypeBitMap) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range t {
-		enc.AppendString(strings.ToLower(dns.Type(t[i]).String()))
+		enc.AppendString(strings.ToLower(rrTypeToString(t[i])))
 	}
 
 	return nil

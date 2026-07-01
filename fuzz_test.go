@@ -2,16 +2,31 @@ package egresseddie
 
 import (
 	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/florianl/go-nfqueue"
 	"go.uber.org/zap"
+	"pgregory.net/rapid"
 )
 
-// TODO: make flag
-const debugLogging = false
+var debugLogging = flag.Bool("debug-log", false, "enable debug logging in tests")
+
+func createLogger(t rapid.TB) *zap.Logger {
+	t.Helper()
+
+	if !*debugLogging {
+		return zap.NewNop()
+	}
+
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		t.Fatalf("error creating logger: %v", err)
+	}
+	return logger
+}
 
 // FuzzVerdicts sends random packet bytes to all filters (DNS request,
 // response and traffic) and verifies that the filters never panic and
@@ -37,15 +52,7 @@ func FuzzVerdicts(f *testing.F) {
 		f.Add(b, uint8(i%stateRelatedReply))
 	}
 
-	logger := zap.NewNop()
-	if debugLogging {
-		var err error
-		logger, err = zap.NewDevelopment()
-		if err != nil {
-			f.Fatalf("error creating logger: %v", err)
-		}
-	}
-
+	logger := createLogger(f)
 	cb := []byte(`
 inboundDNSQueue.ipv4 = 1
 inboundDNSQueue.ipv6 = 10
