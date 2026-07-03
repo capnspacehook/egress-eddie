@@ -3,6 +3,7 @@ package egresseddie
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -62,16 +63,21 @@ func queuesShared(q1, q2 queue) bool {
 type Config struct {
 	InboundDNSQueue queue
 	SelfDNSQueue    queue
+	DoHResolve      bool
+	DoHURL          string
+	DoHServerName   string
 	Filters         []FilterOptions
 
 	enforcerCreator enforcerCreator
 	resolver        resolver
 }
 
+// TODO: add CachedTargets
 type FilterOptions struct {
-	Name            string
-	DNSQueue        queue
-	TrafficQueue    queue
+	Name         string
+	DNSQueue     queue
+	TrafficQueue queue
+	// TODO: remove?
 	AllowAllDomains bool
 	AllowAnswersFor time.Duration
 	ReCacheEvery    time.Duration
@@ -120,6 +126,31 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	}
 	if !config.InboundDNSQueue.valid() {
 		return nil, errors.New(`"inboundDNSQueue.ipv4" and "inboundDNSQueue.ipv6" cannot be the same`)
+	}
+
+	if !config.DoHResolve {
+		if config.DoHURL != "" {
+			return nil, errors.New(`"dohResolve" must be set when "dohURL" is set`)
+		} else if config.DoHServerName != "" {
+			return nil, errors.New(`"dohResolve" must be set when "dohServerName" is set`)
+		}
+	} else {
+		if config.DoHURL == "" {
+			return nil, errors.New(`"dohURL" must be set when "dohResolve" is set`)
+		}
+		dohURL, err := url.Parse(config.DoHURL)
+		if err != nil {
+			return nil, fmt.Errorf("parsing DoH URL %q: %w", config.DoHURL, err)
+		}
+		if dohURL.Scheme != "https" {
+			return nil, fmt.Errorf(`DoH URL %q must use scheme "https"`, config.DoHURL)
+		}
+		if dohURL.Host == "" {
+			return nil, fmt.Errorf(`DoH URL %q must have a host`, config.DoHURL)
+		}
+		if dohURL.Path != "" {
+			return nil, fmt.Errorf(`DoH URL %q must not have a path`, config.DoHURL)
+		}
 	}
 
 	ipv4Used := config.InboundDNSQueue.IPv4 != 0

@@ -144,6 +144,7 @@ func testFilterState(t *rapid.T) {
 
 		t.Repeat(map[string]func(*rapid.T){
 			"dns request": func(t *rapid.T) {
+				// TODO: in DoH mode the resolver should generate response
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
 				ep := drawEndpoint(t, ipv6)
 				connState := drawConnState(t)
@@ -169,6 +170,7 @@ func testFilterState(t *rapid.T) {
 				settleAndCheck()
 			},
 			"dns response": func(t *rapid.T) {
+				// TODO: in DoH mode, all should be rejected
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
 				ep := drawResponseEndpoint(t, m, ipv6)
 				connState := drawConnState(t)
@@ -205,9 +207,6 @@ func testFilterState(t *rapid.T) {
 					queue = qInboundV6
 				}
 
-				// The connection entry is consumed as soon as it's found, BEFORE
-				// any validation (REVIEW_TODO #3), so the removeConn mutation
-				// tracks "found" regardless of the eventual verdict.
 				established := connIsEstablished(connState)
 				found := havePending && established
 				accept := found && !malformed && m.responseConditionalAccept(parsed)
@@ -633,8 +632,7 @@ func genPrefixLabels(t *rapid.T, n int) string {
 }
 
 // genCase applies a 0x20 (case) transformation. DNS is case-insensitive on the
-// wire, so every variant must be handled identically — this is what catches the
-// mixed-case chain bug (REVIEW_TODO #2).
+// wire, so every variant must be handled identically
 func genCase(t *rapid.T, s string) string {
 	switch rapid.IntRange(0, 2).Draw(t, "case") {
 	case 0:

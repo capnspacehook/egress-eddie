@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
@@ -66,19 +67,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	logCfg := zap.NewProductionConfig()
-	logCfg.OutputPaths = []string{*logPath}
-	if *debugLogs {
-		logCfg.Level.SetLevel(zap.DebugLevel)
-	}
-	logCfg.EncoderConfig.TimeKey = "time"
-	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	logCfg.DisableCaller = true
-
-	logger, err := logCfg.Build()
-	if err != nil {
-		log.Fatalf("error creating logger: %v", err)
-	}
+	logger := buildLogger(*logPath, *debugLogs, *validateConfig)
 
 	var versionFields []zap.Field
 	versionFields = append(versionFields, zap.String("version", version))
@@ -101,16 +90,25 @@ func main() {
 		os.Exit(0)
 	}
 	if err != nil {
-		logger.Fatal("error parsing config", zap.NamedError("error", err))
+		logger.Fatal("parsing config", zap.Error(err))
 	}
 
-	// Try and apply landlock rules, preventing access to non-essential
+	// Preload the system root certs if DoH is enabled so we don't have
+	// to allow reading these files in the landlock rules.
+	if config.DoHResolve {
+		_, err := x509.SystemCertPool()
+		if err != nil {
+			logger.Fatal("loading system certificates", zap.Error(err))
+		}
+	}
+
+	// Try to apply landlock rules, preventing access to non-essential
 	// files. Only recent versions of the kernel support landlock (5.13+),
 	// but we will ignore errors if the kernel itself does not support it.
 	// These rules can only be applied when egress-eddie does not need to make
 	// network connections, as currently it seems landlock does not support
 	// networking.
-	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
+	needsNetworking := config.DoHResolve || config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
 	if !needsNetworking {
 		var allowedPaths []landlock.Rule
 		if *logPath != "stdout" && *logPath != "stderr" {
@@ -124,7 +122,7 @@ func main() {
 		)
 		if err != nil {
 			if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
-				logger.Fatal("error creating landlock rules", zap.NamedError("error", err))
+				logger.Fatal("creating landlock rules", zap.Error(err))
 			}
 		}
 		logger.Info("applied landlock rules")
@@ -134,7 +132,7 @@ func main() {
 
 	filters, err := egresseddie.CreateFilters(ctx, logger, config, *permissiveMode, *logFullDNSPackets)
 	if err != nil {
-		logger.Fatal("error starting filters", zap.NamedError("error", err))
+		logger.Fatal("starting filters", zap.Error(err))
 	}
 
 	defer func() {
@@ -150,9 +148,9 @@ func main() {
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of
 	// the process's lifetime.
-	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking)
+	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking, config.DoHResolve)
 	if err != nil {
-		logger.Error("error setting seccomp rules", zap.NamedError("error", err))
+		logger.Error("error setting seccomp rules", zap.Error(err))
 		return
 	}
 	logger.Info("applied seccomp filters", zap.Int("syscalls.allowed", numAllowedSyscalls))
@@ -162,4 +160,26 @@ func main() {
 	logger.Info("started filtering")
 
 	<-ctx.Done()
+}
+
+func buildLogger(logPath string, debugLogs, validateConfig bool) *zap.Logger {
+	if validateConfig {
+		return zap.NewNop()
+	}
+
+	logCfg := zap.NewProductionConfig()
+	logCfg.OutputPaths = []string{logPath}
+	if debugLogs {
+		logCfg.Level.SetLevel(zap.DebugLevel)
+	}
+	logCfg.EncoderConfig.TimeKey = "time"
+	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	logCfg.DisableCaller = true
+
+	logger, err := logCfg.Build()
+	if err != nil {
+		log.Fatalf("error creating logger: %v", err)
+	}
+
+	return logger
 }

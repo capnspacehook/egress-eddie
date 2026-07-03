@@ -16,6 +16,7 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 		seccomp.EqualTo(unix.CLOCK_MONOTONIC),
 		seccomp.AnyValue{},
 	},
+	// used to create OS threads for the Go scheduler
 	unix.SYS_CLONE: seccomp.PerArg{
 		// parent_tidptr and child_tidptr are always 0 because neither
 		// CLONE_PARENT_SETTID nor CLONE_CHILD_SETTID are used.
@@ -27,10 +28,10 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 				unix.CLONE_SIGHAND |
 				unix.CLONE_SYSVSEM |
 				unix.CLONE_THREAD),
-		seccomp.AnyValue{}, // newsp
-		seccomp.EqualTo(0), // parent_tidptr
-		seccomp.EqualTo(0), // child_tidptr
-		seccomp.AnyValue{}, // tls
+		seccomp.AnyValue{},
+		seccomp.EqualTo(0),
+		seccomp.EqualTo(0),
+		seccomp.AnyValue{},
 	},
 	unix.SYS_CLOSE: seccomp.MatchAll{},
 	unix.SYS_EPOLL_CTL: seccomp.Or{
@@ -108,6 +109,7 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	unix.SYS_MUNMAP:     seccomp.MatchAll{},
 	unix.SYS_NANOSLEEP:  seccomp.MatchAll{},
 	unix.SYS_NEWFSTATAT: seccomp.MatchAll{},
+	// used to name anonymous memory mappings
 	unix.SYS_PRCTL: seccomp.PerArg{
 		seccomp.EqualTo(unix.PR_SET_VMA),
 		seccomp.AnyValue{},
@@ -117,6 +119,7 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	},
 	unix.SYS_PREAD64: seccomp.MatchAll{},
 	unix.SYS_READ:    seccomp.MatchAll{},
+	// used to receive queued packets from nfqueue over netlink
 	unix.SYS_RECVMSG: seccomp.Or{
 		seccomp.PerArg{
 			seccomp.AnyValue{},
@@ -140,6 +143,7 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	unix.SYS_RT_SIGRETURN:      seccomp.MatchAll{},
 	unix.SYS_SCHED_GETAFFINITY: seccomp.MatchAll{},
 	unix.SYS_SCHED_YIELD:       seccomp.MatchAll{},
+	// used to send nfqueue verdicts over netlink
 	unix.SYS_SENDMSG: seccomp.PerArg{
 		seccomp.AnyValue{},
 		seccomp.AnyValue{},
@@ -150,13 +154,13 @@ var allowedSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 		seccomp.EqualTo(uint64(os.Getpid())),
 	},
 	unix.SYS_WRITE: seccomp.MatchAll{},
-	unix.SYS_UNAME: seccomp.MatchAll{},
 })
 
 var networkSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	unix.SYS_CONNECT:     seccomp.MatchAll{},
 	unix.SYS_GETPEERNAME: seccomp.MatchAll{},
 	unix.SYS_GETSOCKNAME: seccomp.MatchAll{},
+	// used to read system files such as resolver config and certificates
 	unix.SYS_OPENAT: seccomp.PerArg{
 		seccomp.AnyValue{},
 		seccomp.AnyValue{},
@@ -202,18 +206,125 @@ var networkSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	},
 })
 
+// TODO: move getsockopt and setsockopt to above to handle TCP DNS?
+var dohResolveInjectSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
+	// used to bind the netlink socket used to enumerate interfaces
+	unix.SYS_BIND: seccomp.MatchAll{},
+	// used to read SO_ERROR to complete non-blocking connects
+	unix.SYS_GETSOCKOPT: seccomp.PerArg{
+		seccomp.AnyValue{},
+		seccomp.EqualTo(unix.SOL_SOCKET),
+		seccomp.EqualTo(unix.SO_ERROR),
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+	},
+	unix.SYS_GETRANDOM: seccomp.PerArg{
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.EqualTo(0),
+	},
+	// additional mapping calls by net/http and/or crypto/tls
+	unix.SYS_MMAP: seccomp.Or{
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.PROT_READ | unix.PROT_WRITE),
+			seccomp.EqualTo(0x8 | unix.MAP_ANONYMOUS),
+			seccomp.GreaterThan(0),
+			seccomp.EqualTo(0),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.PROT_NONE),
+			seccomp.EqualTo(unix.MAP_PRIVATE | unix.MAP_ANONYMOUS),
+			seccomp.GreaterThan(0),
+			seccomp.EqualTo(0),
+		},
+	},
+	// used to read netlink interface-enumeration responses
+	unix.SYS_RECVFROM: seccomp.PerArg{
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.EqualTo(0),
+	},
+	// used to write netlink requests and inject synthesized DNS replies
+	unix.SYS_SENDTO: seccomp.PerArg{
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.EqualTo(0),
+	},
+	unix.SYS_SETSOCKOPT: seccomp.Or{
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.SOL_TCP),
+			seccomp.EqualTo(unix.TCP_NODELAY),
+			seccomp.AnyValue{},
+			seccomp.EqualTo(4),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.SOL_SOCKET),
+			seccomp.EqualTo(unix.SO_KEEPALIVE),
+			seccomp.AnyValue{},
+			seccomp.EqualTo(4),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.SOL_TCP),
+			seccomp.EqualTo(unix.TCP_KEEPIDLE),
+			seccomp.AnyValue{},
+			seccomp.EqualTo(4),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.SOL_TCP),
+			seccomp.EqualTo(unix.TCP_KEEPINTVL),
+			seccomp.AnyValue{},
+			seccomp.EqualTo(4),
+		},
+		seccomp.PerArg{
+			seccomp.AnyValue{},
+			seccomp.EqualTo(unix.SOL_TCP),
+			seccomp.EqualTo(unix.TCP_KEEPCNT),
+			seccomp.AnyValue{},
+			seccomp.EqualTo(4),
+		},
+	},
+	// used for opening the AF_PACKET inject socket and AF_NETLINK
+	// interface-lookup socket
+	unix.SYS_SOCKET: seccomp.Or{
+		seccomp.PerArg{
+			seccomp.EqualTo(unix.AF_PACKET),
+			seccomp.EqualTo(unix.SOCK_RAW | unix.SOCK_CLOEXEC),
+			seccomp.EqualTo(0),
+		},
+		seccomp.PerArg{
+			seccomp.EqualTo(unix.AF_NETLINK),
+			seccomp.EqualTo(unix.SOCK_RAW | unix.SOCK_CLOEXEC),
+			seccomp.EqualTo(unix.NETLINK_ROUTE),
+		},
+	},
+})
+
 type nullEmitter struct{}
 
 func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...interface{}) {}
 
 const violationAction = seccomp.KillProcess
 
-func installSeccompFilters(logger *zap.Logger, needsNetworking bool) (int, error) {
+func installSeccompFilters(logger *zap.Logger, needsNetworking, dohResolve bool) (int, error) {
 	// only allow Egress Eddie to make outbound connections if DNS
 	// requests will need to be made directly
 	if needsNetworking {
 		logger.Debug("allowing networking syscalls")
 		allowedSyscalls.Merge(networkSyscalls)
+	}
+	if dohResolve {
+		logger.Debug("allowing DoH syscalls")
+		allowedSyscalls.Merge(dohResolveInjectSyscalls)
 	}
 
 	// disable logging from seccomp package
