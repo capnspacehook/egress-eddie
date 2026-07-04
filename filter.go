@@ -565,6 +565,20 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
+			// allow request if all domains are allowed
+			if f.opts.AllowAllDomains {
+				ri, err := newRequestInfo(reqMsg)
+				if err != nil {
+					logger.Error("dropping DNS request", f.dropReasonFields(err, reqMsg)...)
+					return dropVerdict
+				}
+
+				logger.Info("allowing DNS request", dnsFields(reqMsg, f.fullDNSLogging)...)
+				logger.Debug("adding connection")
+				f.connections.AddValue(connID, ri, dnsQueryTimeout)
+				return acceptVerdict
+			}
+
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
 			ri, err := f.validateDNSQuestion(reqMsg)
@@ -712,45 +726,33 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 }
 
 func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (requestInfo, error) {
-	if len(dnsMsg.Question) == 0 {
-		// drop DNS requests with no questions; this probably
-		// doesn't happen in practice but doesn't hurt to
-		// handle this case
-		return requestInfo{}, errors.New("no questions in DNS request")
-	} else if len(dnsMsg.Question) > 1 {
+	if len(dnsMsg.Question) > 1 {
 		// drop DNS requests with more than one question; this is
 		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
 		return requestInfo{}, fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
 	}
 
-	q := dnsMsg.Question[0]
-	h := q.Header()
-	if h == nil {
-		return requestInfo{}, fmt.Errorf("question header is nil")
-	}
-
-	if h.Class != dns.ClassINET {
-		return requestInfo{}, fmt.Errorf("question class %s is not INET", qClassToString(h.Class))
-	}
-	qType := dns.RRToType(q)
-	if !slices.Contains(allowedRRTypes, qType) {
-		return requestInfo{}, fmt.Errorf("question type %s is not allowed", rrTypeToString(qType))
-	}
-
-	ok, err := f.validateDNSName(qType, h.Name)
+	ri, err := newRequestInfo(dnsMsg)
 	if err != nil {
-		return requestInfo{}, fmt.Errorf("validating domain name %q in question: %w", h.Name, err)
+		return requestInfo{}, err
+	}
+
+	if ri.qClass != dns.ClassINET {
+		return requestInfo{}, fmt.Errorf("question class %s is not INET", qClassToString(ri.qClass))
+	}
+	if !slices.Contains(allowedRRTypes, ri.qType) {
+		return requestInfo{}, fmt.Errorf("question type %s is not allowed", rrTypeToString(ri.qType))
+	}
+
+	ok, err := f.validateDNSName(ri.qType, ri.qName)
+	if err != nil {
+		return requestInfo{}, fmt.Errorf("validating domain name %q in question: %w", ri.qName, err)
 	}
 	if !ok {
-		return requestInfo{}, fmt.Errorf("domain name %q in question is not allowed", h.Name)
+		return requestInfo{}, fmt.Errorf("domain name %q in question is not allowed", ri.qName)
 	}
 
-	return requestInfo{
-		id:     dnsMsg.ID,
-		qName:  h.Name,
-		qType:  qType,
-		qClass: h.Class,
-	}, nil
+	return ri, nil
 }
 
 func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
@@ -913,10 +915,6 @@ func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 		return false, err
 	}
 
-	if f.opts.AllowAllDomains {
-		return true, nil
-	}
-
 	lowerDomain := prepareDomainName(domain)
 	f.logger.Debug("checking if domain is allowed", zap.String("domain", lowerDomain))
 
@@ -1072,8 +1070,8 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 			}
 
 			// allow DNS response if the filter it came from is the self
-			// filter or if there are no answers
-			if connFilter.isSelfFilter || len(respMsg.Answer) == 0 {
+			// filter, all domains are allowed, or if there are no answers
+			if connFilter.isSelfFilter || connFilter.opts.AllowAllDomains || len(respMsg.Answer) == 0 {
 				logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}
