@@ -736,7 +736,7 @@ func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
 	respQ := resp.Question[0]
 	respQHdr := respQ.Header()
 	if respQHdr == nil {
-		return fmt.Errorf("response question header is nil")
+		return errors.New("response question header is nil")
 	}
 	qType := dns.RRToType(respQ)
 
@@ -757,7 +757,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 	for _, a := range dnsMsg.Answer {
 		h := a.Header()
 		if h == nil {
-			return fmt.Errorf("answer header is nil")
+			return errors.New("answer header is nil")
 		}
 
 		if h.Class != dns.ClassINET {

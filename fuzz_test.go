@@ -97,9 +97,9 @@ allowedDomains = [
 
 		for i, queue := range dnsQueues {
 			mockEnforcers[queue].hook(nfqueue.Attribute{
-				PacketID: ref(packetID),
-				CtInfo:   ref(uint32(connState)),
-				Payload:  ref(packet),
+				PacketID: new(packetID),
+				CtInfo:   new(uint32(connState)),
+				Payload:  new(packet),
 			})
 
 			// DNS request filters should never add IPs or domains
@@ -123,8 +123,4 @@ allowedDomains = [
 			delete(mockEnforcers[queue].verdicts, packetID)
 		}
 	})
-}
-
-func ref[T any](t T) *T {
-	return &t
 }

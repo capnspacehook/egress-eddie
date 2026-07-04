@@ -829,10 +829,10 @@ func (d *driver) deliver(queue uint16, connState uint32, ipv6 bool, packet []byt
 	id := d.packetID
 	e := mockEnforcers[queue]
 	e.hook(nfqueue.Attribute{
-		PacketID:   ref(id),
-		CtInfo:     ref(connState),
-		HwProtocol: ref(hwProto),
-		Payload:    ref(packet),
+		PacketID:   new(id),
+		CtInfo:     new(connState),
+		HwProtocol: new(hwProto),
+		Payload:    new(packet),
 	})
 
 	v, ok := e.verdicts[id]

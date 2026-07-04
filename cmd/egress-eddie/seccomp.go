@@ -311,7 +311,7 @@ var dohResolveInjectSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.Sysc
 
 type nullEmitter struct{}
 
-func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...interface{}) {}
+func (nullEmitter) Emit(_ int, _ log.Level, _ time.Time, _ string, _ ...any) {}
 
 const violationAction = seccomp.KillProcess
 

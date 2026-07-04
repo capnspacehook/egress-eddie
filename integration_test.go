@@ -342,22 +342,22 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 	t.Helper()
 
 	if _, err := exec.LookPath(*eddieBinary); err != nil {
-		t.Fatalf("error finding egress eddie binary: %v", err)
+		t.Fatalf("finding egress eddie binary: %v", err)
 	}
 	if _, err := exec.LookPath("strace"); err != nil {
-		t.Fatalf("error finding strace: %v", err)
+		t.Fatalf("finding strace: %v", err)
 	}
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	f, err := os.Create(configPath)
 	if err != nil {
-		t.Fatalf("error creating config file: %v", err)
+		t.Fatalf("creating config file: %v", err)
 	}
 	if _, err = f.WriteString(configStr); err != nil {
-		t.Fatalf("error writing config file: %v", err)
+		t.Fatalf("writing config file: %v", err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatalf("error closing config file: %v", err)
+		t.Fatalf("closing config file: %v", err)
 	}
 
 	iptablesCmd(t, "-F")
@@ -367,7 +367,7 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 
 	wd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("error getting working directory: %v", err)
+		t.Fatalf("getting working directory: %v", err)
 	}
 	tracePath := filepath.Join(wd, "trace.txt")
 
@@ -379,7 +379,7 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 		Setpgid: true,
 	}
 	if err := eddieCmd.Start(); err != nil {
-		t.Fatalf("error starting egress eddie binary: %v", err)
+		t.Fatalf("starting egress eddie binary: %v", err)
 	}
 
 	time.Sleep(time.Second)
@@ -387,7 +387,7 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 	t.Cleanup(func() {
 		err := unix.Kill(-eddieCmd.Process.Pid, unix.SIGINT)
 		if err != nil {
-			t.Errorf("error killing egress eddie process: %v", err)
+			t.Errorf("killing egress eddie process: %v", err)
 		}
 
 		done := make(chan struct{})
@@ -419,7 +419,7 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules []string)
 
 	config, err := parseConfigBytes([]byte(configStr))
 	if err != nil {
-		t.Fatalf("error parsing config: %v", err)
+		t.Fatalf("parsing config: %v", err)
 	}
 
 	iptablesCmd(t, "-F")
@@ -436,13 +436,13 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules []string)
 
 	logger, err := logCfg.Build()
 	if err != nil {
-		t.Fatalf("error creating logger: %v", err)
+		t.Fatalf("creating logger: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	filters, err := CreateFilters(ctx, logger, config, false, true)
 	if err != nil {
-		t.Fatalf("error starting filters: %v", err)
+		t.Fatalf("starting filters: %v", err)
 	}
 	filters.Start()
 
@@ -458,15 +458,15 @@ func iptablesCmd(t *testing.T, args string) {
 
 	splitArgs, err := shlex.Split(args, true)
 	if err != nil {
-		t.Fatalf("error spitting command %v: %v", args, err)
+		t.Fatalf("spitting command %v: %v", args, err)
 	}
 
 	if err := exec.Command("iptables", splitArgs...).Run(); err != nil {
-		t.Fatalf("error running command %v: %v", args, err)
+		t.Fatalf("running command %v: %v", args, err)
 	}
 	if *enableIPv6 {
 		if err := exec.Command("ip6tables", splitArgs...).Run(); err != nil {
-			t.Fatalf("error running command %v: %v", args, err)
+			t.Fatalf("running command %v: %v", args, err)
 		}
 	}
 }
