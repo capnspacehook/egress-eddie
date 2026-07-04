@@ -22,7 +22,7 @@ type dohProxy struct {
 }
 
 // TODO: use generic singleflight and timedcache to minimize requests
-func newDoHProxy(resolverURL, serverName string) (*dohProxy, error) {
+func newDoHProxy(resolverURL, serverName string) *dohProxy {
 	c := http.Client{
 		Transport: &http.Transport{
 			ForceAttemptHTTP2: true,
@@ -37,7 +37,7 @@ func newDoHProxy(resolverURL, serverName string) (*dohProxy, error) {
 	return &dohProxy{
 		resolverURL: resolverURL,
 		client:      &c,
-	}, nil
+	}
 }
 
 func (d *dohProxy) sendDoHRequest(dnsReq *dns.Msg) (*dns.Msg, error) {
@@ -50,7 +50,7 @@ func (d *dohProxy) sendDoHRequest(dnsReq *dns.Msg) (*dns.Msg, error) {
 		return nil, fmt.Errorf("sending DoH request: %w", err)
 	}
 
-	if httpResp.StatusCode != 200 {
+	if httpResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("DoH request failed with status code %d", httpResp.StatusCode)
 	}
 	defer httpResp.Body.Close()
@@ -160,7 +160,9 @@ func (d *dnsInjector) injectResponse(dnsResp *dns.Msg, connID connectionID, attr
 		SrcPort: layers.UDPPort(connID.dst.Port()),
 		DstPort: layers.UDPPort(connID.src.Port()),
 	}
-	udpLayer.SetNetworkLayerForChecksum(ipLayer)
+	if err := udpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
+		return fmt.Errorf("setting UDP checksum layer: %w", err)
+	}
 	if err := dnsResp.Pack(); err != nil {
 		return fmt.Errorf("encoding dns response: %w", err)
 	}

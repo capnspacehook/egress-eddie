@@ -160,6 +160,14 @@ var networkSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.SyscallRule{
 	unix.SYS_CONNECT:     seccomp.MatchAll{},
 	unix.SYS_GETPEERNAME: seccomp.MatchAll{},
 	unix.SYS_GETSOCKNAME: seccomp.MatchAll{},
+	unix.SYS_MMAP: seccomp.PerArg{
+		seccomp.AnyValue{},
+		seccomp.AnyValue{},
+		seccomp.EqualTo(unix.PROT_NONE),
+		seccomp.EqualTo(unix.MAP_PRIVATE | unix.MAP_ANONYMOUS),
+		seccomp.GreaterThan(0),
+		seccomp.EqualTo(0),
+	},
 	// used to read system files such as resolver config and certificates
 	unix.SYS_OPENAT: seccomp.PerArg{
 		seccomp.AnyValue{},
@@ -223,21 +231,13 @@ var dohResolveInjectSyscalls = seccomp.MakeSyscallRules(map[uintptr]seccomp.Sysc
 		seccomp.AnyValue{},
 		seccomp.EqualTo(0),
 	},
-	// additional mapping calls by net/http and/or crypto/tls
+	// additional mapping call by net/http and/or crypto/tls
 	unix.SYS_MMAP: seccomp.Or{
 		seccomp.PerArg{
 			seccomp.AnyValue{},
 			seccomp.AnyValue{},
 			seccomp.EqualTo(unix.PROT_READ | unix.PROT_WRITE),
 			seccomp.EqualTo(0x8 | unix.MAP_ANONYMOUS),
-			seccomp.GreaterThan(0),
-			seccomp.EqualTo(0),
-		},
-		seccomp.PerArg{
-			seccomp.AnyValue{},
-			seccomp.AnyValue{},
-			seccomp.EqualTo(unix.PROT_NONE),
-			seccomp.EqualTo(unix.MAP_PRIVATE | unix.MAP_ANONYMOUS),
 			seccomp.GreaterThan(0),
 			seccomp.EqualTo(0),
 		},

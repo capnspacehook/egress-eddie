@@ -211,11 +211,8 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 	var dohRes *dohProxy
 	var injector *dnsInjector
 	if config.DoHResolve {
+		dohRes = newDoHProxy(config.DoHURL, config.DoHServerName)
 		var err error
-		dohRes, err = newDoHProxy(config.DoHURL, config.DoHServerName)
-		if err != nil {
-			return nil, err
-		}
 		injector, err = newDNSInjector()
 		if err != nil {
 			return nil, err
