@@ -24,7 +24,7 @@ func initMockEnforcers() {
 	mockEnforcers = make(map[uint16]*mockEnforcer)
 }
 
-func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, ipv6 bool, createHook hookCreator) (enforcer, error) {
+func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, createHook hookCreator) (enforcer, error) {
 	if _, ok := mockEnforcers[queueNum]; ok {
 		return nil, fmt.Errorf("a nfqueue with the queue number %d has already been started", queueNum)
 	}
@@ -35,7 +35,7 @@ func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, ipv6 boo
 	mEnforcer := &mockEnforcer{
 		verdicts: make(map[uint32]int),
 	}
-	mEnforcer.hook = createHook(queueNum, ipv6, mEnforcer)
+	mEnforcer.hook = createHook(queueNum, mEnforcer)
 	mockEnforcers[queueNum] = mEnforcer
 
 	return mEnforcer, nil

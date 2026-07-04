@@ -108,7 +108,7 @@ func main() {
 	// These rules can only be applied when egress-eddie does not need to make
 	// network connections, as currently it seems landlock does not support
 	// networking.
-	needsNetworking := config.DoHResolve || config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
+	needsNetworking := config.DoHResolve || config.SelfDNSQueue != 0
 	if !needsNetworking {
 		var allowedPaths []landlock.Rule
 		if *logPath != "stdout" && *logPath != "stderr" {

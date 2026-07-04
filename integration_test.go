@@ -44,15 +44,12 @@ func TestIntegrationFiltering(t *testing.T) {
 	requireRoot(t)
 
 	configStr := `
-inboundDNSQueue.ipv4 = 1
-inboundDNSQueue.ipv6 = 10
+inboundDNSQueue = 1
 
 [[filters]]
 name = "test"
-dnsQueue.ipv4 = 1000
-dnsQueue.ipv6 = 1010
-trafficQueue.ipv4 = 1001
-trafficQueue.ipv6 = 1011
+dnsQueue = 1000
+trafficQueue = 1001
 allowAnswersFor = "3s"
 allowedDomains = [
 	"google.com",
@@ -79,11 +76,6 @@ allowedTargets = [
 			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
 			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1001",
-		},
-		[]string{
-			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
-			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
-			"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
 	client4, client6 := getHTTPClients()
@@ -177,13 +169,11 @@ func TestIntegrationAllowAll(t *testing.T) {
 	requireRoot(t)
 
 	configStr := `
-inboundDNSQueue.ipv4 = 1
-inboundDNSQueue.ipv6 = 10
+inboundDNSQueue = 1
 
 [[filters]]
 name = "test"
-dnsQueue.ipv4 = 1000
-dnsQueue.ipv6 = 1010
+dnsQueue = 1000
 allowAllDomains = true`
 
 	initFilters(
@@ -192,10 +182,6 @@ allowAllDomains = true`
 		[]string{
 			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
-		},
-		[]string{
-			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
-			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1010",
 		},
 	)
 	client4, client6 := getHTTPClients()
@@ -210,15 +196,12 @@ func TestIntegrationCaching(t *testing.T) {
 	requireRoot(t)
 
 	configStr := `
-inboundDNSQueue.ipv4 = 1
-inboundDNSQueue.ipv6 = 10
-selfDNSQueue.ipv4 = 100
-selfDNSQueue.ipv6 = 110
+inboundDNSQueue = 1
+selfDNSQueue = 100
 
 [[filters]]
 name = "test"
-trafficQueue.ipv4 = 1001
-trafficQueue.ipv6 = 1011
+trafficQueue = 1001
 reCacheEvery = "1m"
 cachedDomains = [
 	"digitalocean.com",
@@ -236,11 +219,6 @@ cachedDomains = [
 			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
 			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
-		},
-		[]string{
-			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 10",
-			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 110",
-			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1011",
 		},
 	)
 	client4, _ := getHTTPClients()
@@ -265,13 +243,13 @@ func TestIntegrationFiltersStart(t *testing.T) {
 	requireRoot(t)
 
 	configBytes := []byte(`
-inboundDNSQueue.ipv6 = 10
-selfDNSQueue.ipv6 = 110
+inboundDNSQueue = 10
+selfDNSQueue = 110
 
 [[filters]]
 name = "test"
-dnsQueue.ipv6 = 1010
-trafficQueue.ipv6 = 1011
+dnsQueue = 1010
+trafficQueue = 1011
 reCacheEvery = "1m"
 cachedDomains = [
 	"example.com",
@@ -304,19 +282,19 @@ allowedDomains = [
 		finishedAt := make(chan time.Time)
 
 		go func() {
-			mockEnforcers[config.InboundDNSQueue.IPv6].hook(nfqueue.Attribute{})
+			mockEnforcers[config.InboundDNSQueue].hook(nfqueue.Attribute{})
 			t.Log("finished DNS reply queue")
 			finishedAt <- time.Now()
 		}()
 		// the self-filter will be the first filter
 		testFilter := config.Filters[1]
 		go func() {
-			mockEnforcers[testFilter.DNSQueue.IPv6].hook(nfqueue.Attribute{})
+			mockEnforcers[testFilter.DNSQueue].hook(nfqueue.Attribute{})
 			t.Log("finished DNS request queue")
 			finishedAt <- time.Now()
 		}()
 		go func() {
-			mockEnforcers[testFilter.TrafficQueue.IPv6].hook(nfqueue.Attribute{})
+			mockEnforcers[testFilter.TrafficQueue].hook(nfqueue.Attribute{})
 			t.Log("finished generic queue")
 			finishedAt <- time.Now()
 		}()
@@ -349,18 +327,18 @@ allowedDomains = [
 	})
 }
 
-func initFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+func initFilters(t *testing.T, configStr string, iptablesRules []string) {
 	t.Helper()
 
 	switch {
 	case *binaryTests:
-		initBinaryFilters(t, configStr, iptablesRules, ip6tablesRules)
+		initBinaryFilters(t, configStr, iptablesRules)
 	default:
-		initStandardFilters(t, configStr, iptablesRules, ip6tablesRules)
+		initStandardFilters(t, configStr, iptablesRules)
 	}
 }
 
-func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 	t.Helper()
 
 	if _, err := exec.LookPath(*eddieBinary); err != nil {
@@ -382,14 +360,9 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 		t.Fatalf("error closing config file: %v", err)
 	}
 
-	iptablesCmd(t, false, "-F")
+	iptablesCmd(t, "-F")
 	for _, command := range iptablesRules {
-		iptablesCmd(t, false, command)
-	}
-
-	iptablesCmd(t, true, "-F")
-	for _, command := range ip6tablesRules {
-		iptablesCmd(t, true, command)
+		iptablesCmd(t, command)
 	}
 
 	wd, err := os.Getwd()
@@ -437,12 +410,11 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules, ip6tablesR
 			_ = eddieCmd.Process.Kill()
 		}
 
-		iptablesCmd(t, false, "-F")
-		iptablesCmd(t, true, "-F")
+		iptablesCmd(t, "-F")
 	})
 }
 
-func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6tablesRules []string) {
+func initStandardFilters(t *testing.T, configStr string, iptablesRules []string) {
 	t.Helper()
 
 	config, err := parseConfigBytes([]byte(configStr))
@@ -450,14 +422,9 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6table
 		t.Fatalf("error parsing config: %v", err)
 	}
 
-	iptablesCmd(t, false, "-F")
+	iptablesCmd(t, "-F")
 	for _, command := range iptablesRules {
-		iptablesCmd(t, false, command)
-	}
-
-	iptablesCmd(t, true, "-F")
-	for _, command := range ip6tablesRules {
-		iptablesCmd(t, true, command)
+		iptablesCmd(t, command)
 	}
 
 	logCfg := zap.NewProductionConfig()
@@ -482,12 +449,11 @@ func initStandardFilters(t *testing.T, configStr string, iptablesRules, ip6table
 	t.Cleanup(func() {
 		cancel()
 		filters.Stop()
-		iptablesCmd(t, false, "-F")
-		iptablesCmd(t, true, "-F")
+		iptablesCmd(t, "-F")
 	})
 }
 
-func iptablesCmd(t *testing.T, ipv6 bool, args string) {
+func iptablesCmd(t *testing.T, args string) {
 	t.Helper()
 
 	splitArgs, err := shlex.Split(args, true)
@@ -495,13 +461,13 @@ func iptablesCmd(t *testing.T, ipv6 bool, args string) {
 		t.Fatalf("error spitting command %v: %v", args, err)
 	}
 
-	cmd := "iptables"
-	if ipv6 {
-		cmd = "ip6tables"
-	}
-
-	if err := exec.Command(cmd, splitArgs...).Run(); err != nil {
+	if err := exec.Command("iptables", splitArgs...).Run(); err != nil {
 		t.Fatalf("error running command %v: %v", args, err)
+	}
+	if *enableIPv6 {
+		if err := exec.Command("ip6tables", splitArgs...).Run(); err != nil {
+			t.Fatalf("error running command %v: %v", args, err)
+		}
 	}
 }
 

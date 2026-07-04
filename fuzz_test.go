@@ -54,15 +54,12 @@ func FuzzVerdicts(f *testing.F) {
 
 	logger := createLogger(f)
 	cb := []byte(`
-inboundDNSQueue.ipv4 = 1
-inboundDNSQueue.ipv6 = 10
+inboundDNSQueue = 1
 
 [[filters]]
 name = "fuzz"
-dnsQueue.ipv4 = 1000
-dnsQueue.ipv6 = 1010
-trafficQueue.ipv4 = 1001
-trafficQueue.ipv6 = 1011
+dnsQueue = 1000
+trafficQueue = 1001
 allowAnswersFor = "1s"
 allowedDomains = [
 	"foo",
@@ -89,10 +86,8 @@ allowedDomains = [
 	filters.Start()
 
 	dnsQueues := []uint16{
-		config.InboundDNSQueue.IPv4,
-		config.InboundDNSQueue.IPv6,
-		config.Filters[0].DNSQueue.IPv4,
-		config.Filters[0].DNSQueue.IPv6,
+		config.InboundDNSQueue,
+		config.Filters[0].DNSQueue,
 	}
 
 	packetID := uint32(1)

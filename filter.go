@@ -58,13 +58,11 @@ type FilterManager struct {
 	fullDNSLogging bool
 	logger         *zap.Logger
 
-	queueNum4 uint16
-	queueNum6 uint16
+	queueNum uint16
 
 	injector *dnsInjector
 
-	dnsRespNF4 enforcer
-	dnsRespNF6 enforcer
+	dnsRespNF enforcer
 
 	filters []*filter
 }
@@ -83,10 +81,8 @@ type filter struct {
 	fullDNSLogging bool
 	logger         *zap.Logger
 
-	dnsReqNF4  enforcer
-	dnsReqNF6  enforcer
-	genericNF4 enforcer
-	genericNF6 enforcer
+	dnsReqNF  enforcer
+	genericNF enforcer
 
 	res      resolver
 	dohRes   *dohProxy
@@ -181,9 +177,9 @@ const (
 type packetCallback func(attr nfqueue.Attribute) verdict
 
 // hookCreator is a function that creates a hook function for a given queue.
-type hookCreator func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc
+type hookCreator func(queueNum uint16, e enforcer) nfqueue.HookFunc
 
-type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, createHook hookCreator) (enforcer, error)
+type enforcerCreator func(ctx context.Context, logger *zap.Logger, queueNum uint16, createHook hookCreator) (enforcer, error)
 
 // CreateFilters creates packet filters. The returned FilterManager can
 // be used to start or stop packet filtering.
@@ -193,8 +189,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		permissiveMode: permissiveMode,
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
-		queueNum4:      config.InboundDNSQueue.IPv4,
-		queueNum6:      config.InboundDNSQueue.IPv6,
+		queueNum:       config.InboundDNSQueue,
 		filters:        make([]*filter, len(config.Filters)),
 	}
 
@@ -220,12 +215,11 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 	}
 	f.injector = injector
 
-	nf4, nf6, err := openNfQueues(ctx, logger, config.InboundDNSQueue, newEnforcer, newDNSResponseCallback(&f))
+	nf, err := newEnforcer(ctx, logger, config.InboundDNSQueue, newDNSResponseCallback(&f))
 	if err != nil {
 		return nil, err
 	}
-	f.dnsRespNF4 = nf4
-	f.dnsRespNF6 = nf6
+	f.dnsRespNF = nf
 
 	for i := range config.Filters {
 		isSelfFilter := config.SelfDNSQueue == config.Filters[i].DNSQueue
@@ -264,11 +258,8 @@ func (f *FilterManager) Stop() {
 		f.signaler.abort()
 	}
 
-	if f.dnsRespNF4 != nil {
-		f.dnsRespNF4.Close()
-	}
-	if f.dnsRespNF6 != nil {
-		f.dnsRespNF6.Close()
+	if f.dnsRespNF != nil {
+		f.dnsRespNF.Close()
 	}
 
 	for i := range f.filters {
@@ -303,16 +294,15 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		isSelfFilter:    isSelfFilter,
 	}
 
-	if opts.TrafficQueue.eitherSet() {
+	if opts.TrafficQueue != 0 {
 		f.allowedIPs = timedcache.New[netip.Addr, struct{}](f.logger, false)
 		f.additionalDomains = timedcache.New[string, struct{}](filterLogger, false)
 
-		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.TrafficQueue, newEnforcer, newGenericCallback(&f))
+		nf, err := newEnforcer(ctx, filterLogger, opts.TrafficQueue, newGenericCallback(&f))
 		if err != nil {
 			return nil, fmt.Errorf("starting traffic nfqueues: %w", err)
 		}
-		f.genericNF4 = nf4
-		f.genericNF6 = nf6
+		f.genericNF = nf
 
 		if len(f.opts.CachedDomains) > 0 {
 			f.wg.Go(func() {
@@ -321,47 +311,24 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		}
 	}
 
-	if opts.DNSQueue.eitherSet() {
-		nf4, nf6, err := openNfQueues(ctx, filterLogger, opts.DNSQueue, newEnforcer, newDNSRequestCallback(&f))
+	if opts.DNSQueue != 0 {
+		nf, err := newEnforcer(ctx, filterLogger, opts.DNSQueue, newDNSRequestCallback(&f))
 		if err != nil {
 			return nil, fmt.Errorf("starting DNS nfqueues: %w", err)
 		}
-		f.dnsReqNF4 = nf4
-		f.dnsReqNF6 = nf6
+		f.dnsReqNF = nf
 
 	}
 
 	return &f, nil
 }
 
-func openNfQueues(ctx context.Context, logger *zap.Logger, queues queue, newEnforcer enforcerCreator, createHook hookCreator) (nf4 enforcer, nf6 enforcer, err error) {
-	if queues.IPv4 != 0 {
-		nf4, err = newEnforcer(ctx, logger, queues.IPv4, false, createHook)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if queues.IPv6 != 0 {
-		nf6, err = newEnforcer(ctx, logger, queues.IPv6, true, createHook)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	return nf4, nf6, nil
-}
-
-func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 bool, createHook hookCreator) (enforcer, error) {
-	afFamily := unix.AF_INET
-	if ipv6 {
-		afFamily = unix.AF_INET6
-	}
-
+func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, createHook hookCreator) (enforcer, error) {
 	nfqConf := nfqueue.Config{
 		NfQueue:      queueNum,
 		MaxPacketLen: 0xffff,
 		MaxQueueLen:  0xffff,
-		AfFamily:     uint8(afFamily), // TODO: set to unix.AF_UNSPEC and handle IPv4/IPv6 in hooks
+		AfFamily:     unix.AF_UNSPEC,
 		Copymode:     nfqueue.NfQnlCopyPacket,
 		Flags:        nfqueue.NfQaCfgFlagConntrack,
 	}
@@ -392,7 +359,7 @@ func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 
 		return nil, fmt.Errorf("setting GetStrictCheck netlink option: %w", err)
 	}
 
-	hook := createHook(queueNum, ipv6, nf)
+	hook := createHook(queueNum, nf)
 	if err := nf.RegisterWithErrorFunc(ctx, hook, newErrorCallback(logger)); err != nil {
 		return nil, fmt.Errorf("registering nfqueue: %w", err)
 	}
@@ -403,10 +370,10 @@ func openNfQueue(ctx context.Context, logger *zap.Logger, queueNum uint16, ipv6 
 }
 
 func (f *filter) start() {
-	if f.opts.DNSQueue.eitherSet() {
+	if f.opts.DNSQueue != 0 {
 		f.dnsReqSignaler.ready()
 	}
-	if f.opts.TrafficQueue.eitherSet() {
+	if f.opts.TrafficQueue != 0 {
 		f.genericSignaler.ready()
 	}
 	if len(f.opts.CachedDomains) > 0 {
@@ -478,10 +445,10 @@ func (f *filter) close() {
 	// if the filter has not been started yet, tell running goroutines
 	// to abort and finish
 	if !f.started {
-		if f.opts.DNSQueue.eitherSet() {
+		if f.opts.DNSQueue != 0 {
 			f.dnsReqSignaler.abort()
 		}
-		if f.opts.TrafficQueue.eitherSet() {
+		if f.opts.TrafficQueue != 0 {
 			f.genericSignaler.abort()
 		}
 		if len(f.opts.CachedDomains) > 0 {
@@ -491,17 +458,11 @@ func (f *filter) close() {
 
 	f.wg.Wait()
 
-	if f.dnsReqNF4 != nil {
-		f.dnsReqNF4.Close()
+	if f.dnsReqNF != nil {
+		f.dnsReqNF.Close()
 	}
-	if f.dnsReqNF6 != nil {
-		f.dnsReqNF6.Close()
-	}
-	if f.genericNF4 != nil {
-		f.genericNF4.Close()
-	}
-	if f.genericNF6 != nil {
-		f.genericNF6.Close()
+	if f.genericNF != nil {
+		f.genericNF.Close()
 	}
 
 	f.connections.Stop()
@@ -514,7 +475,7 @@ func (f *filter) close() {
 }
 
 func newDNSRequestCallback(f *filter) hookCreator {
-	createCallback := func(logger *zap.Logger, ipv6 bool) packetCallback {
+	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
 			select {
@@ -533,6 +494,10 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				logger.Warn("dropping packet with no connection state")
 				return dropVerdict
 			}
+			if attr.HwProtocol == nil {
+				logger.Warn("dropping packet with no hardware protocol")
+				return dropVerdict
+			}
 			if attr.Payload == nil {
 				logger.Warn("dropping packet with no payload")
 				return dropVerdict
@@ -543,8 +508,12 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				logger.Warn("dropping DNS request with unknown state", zap.Uint32("conn.state", *attr.CtInfo))
 				return dropVerdict
 			}
+			if *attr.HwProtocol != unix.ETH_P_IP && *attr.HwProtocol != unix.ETH_P_IPV6 {
+				logger.Warn("dropping packet with unknown hardware protocol", zap.Uint16("hw.protocol", *attr.HwProtocol))
+				return dropVerdict
+			}
 
-			reqMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, false)
+			reqMsg, connID, err := parseDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if reqMsg != nil {
@@ -618,7 +587,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 		}
 	}
 
-	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
+	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "dns-req"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
 		if f.permissiveMode {
@@ -626,7 +595,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
+		return newHookFunc(logger, e, createCallback(logger), f.permissiveMode)
 	}
 }
 
@@ -993,7 +962,7 @@ func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback, permis
 }
 
 func newDNSResponseCallback(f *FilterManager) hookCreator {
-	createCallback := func(logger *zap.Logger, ipv6 bool) packetCallback {
+	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
 			select {
@@ -1012,6 +981,10 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				logger.Warn("dropping packet with no connection state")
 				return dropVerdict
 			}
+			if attr.HwProtocol == nil {
+				logger.Warn("dropping packet with no hardware protocol")
+				return dropVerdict
+			}
 			if attr.Payload == nil {
 				logger.Warn("dropping packet with no payload")
 				return dropVerdict
@@ -1026,8 +999,12 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				logger.Warn("dropping DNS response with that is not from an established connection", zap.Uint32("conn.state", *attr.CtInfo))
 				return dropVerdict
 			}
+			if *attr.HwProtocol != unix.ETH_P_IP && *attr.HwProtocol != unix.ETH_P_IPV6 {
+				logger.Warn("dropping packet with unknown hardware protocol", zap.Uint16("hw.protocol", *attr.HwProtocol))
+				return dropVerdict
+			}
 
-			respMsg, connID, err := parseDNSPacket(*attr.Payload, ipv6, true)
+			respMsg, connID, err := parseDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, true)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if respMsg != nil {
@@ -1090,7 +1067,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 		}
 	}
 
-	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
+	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "dns-resp"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
 		if f.permissiveMode {
@@ -1098,12 +1075,12 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
+		return newHookFunc(logger, e, createCallback(logger), f.permissiveMode)
 	}
 }
 
 func newGenericCallback(f *filter) hookCreator {
-	createCallback := func(logger *zap.Logger, ipv6 bool) packetCallback {
+	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
 			select {
@@ -1115,11 +1092,20 @@ func newGenericCallback(f *filter) hookCreator {
 			}
 
 			if attr.PacketID == nil {
-				logger.Warn("got packet with no packet ID")
+				logger.Warn("dropping packet with no packet ID")
 				return ignoreVerdict
 			}
+			if attr.HwProtocol == nil {
+				logger.Warn("dropping packet with no hardware protocol")
+				return dropVerdict
+			}
 			if attr.Payload == nil {
-				logger.Warn("got packet with no payload")
+				logger.Warn("dropping packet with no payload")
+				return dropVerdict
+			}
+
+			if *attr.HwProtocol != unix.ETH_P_IP && *attr.HwProtocol != unix.ETH_P_IPV6 {
+				logger.Warn("dropping packet with unknown hardware protocol", zap.Uint16("hw.protocol", *attr.HwProtocol))
 				return dropVerdict
 			}
 
@@ -1131,7 +1117,7 @@ func newGenericCallback(f *filter) hookCreator {
 			)
 
 			// parse packet
-			if !ipv6 {
+			if *attr.HwProtocol == unix.ETH_P_IP {
 				parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
 				parser.IgnoreUnsupported = true
 				parser.SetDecodingLayerContainer(gopacket.DecodingLayerArray(nil))
@@ -1148,7 +1134,7 @@ func newGenericCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 			if len(decoded) == 0 {
-				logger.Warn("got packet with no layers")
+				logger.Warn("dropping packet with no layers")
 				return dropVerdict
 			}
 
@@ -1188,7 +1174,7 @@ func newGenericCallback(f *filter) hookCreator {
 		}
 	}
 
-	return func(queueNum uint16, ipv6 bool, e enforcer) nfqueue.HookFunc {
+	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
 		logger := f.logger.With(zap.String("filter.type", "traffic"))
 		logger = logger.With(zap.Uint16("queue.num", queueNum))
 		if f.permissiveMode {
@@ -1196,7 +1182,7 @@ func newGenericCallback(f *filter) hookCreator {
 		}
 		logger.Info("started nfqueue")
 
-		return newHookFunc(logger, e, createCallback(logger, ipv6), f.permissiveMode)
+		return newHookFunc(logger, e, createCallback(logger), f.permissiveMode)
 	}
 }
 

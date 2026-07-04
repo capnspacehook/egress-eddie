@@ -18,6 +18,7 @@ import (
 	"github.com/florianl/go-nfqueue"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
+	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
 
@@ -37,27 +38,20 @@ const (
 	propConnTimeout     = time.Minute // dnsQueryTimeout
 
 	// queue numbers for the single test filter
-	qInboundV4 = 1
-	qInboundV6 = 2
-	qDNSReqV4  = 100
-	qDNSReqV6  = 101
-	qTrafficV4 = 200
-	qTrafficV6 = 201
+	qInbound = 1
+	qDNSReq  = 100
+	qTraffic = 200
 
 	propConfig = `
-inboundDNSQueue.ipv4 = 1
-inboundDNSQueue.ipv6 = 2
+inboundDNSQueue = 1
 
 [[filters]]
 name = "prop"
-dnsQueue.ipv4 = 100
-dnsQueue.ipv6 = 101
-trafficQueue.ipv4 = 200
-trafficQueue.ipv6 = 201
+dnsQueue = 100
+trafficQueue = 200
 allowAnswersFor = "10s"
 allowedDomains = ["allowed.test"]
-allowedTargets = ["target.test"]
-`
+allowedTargets = ["target.test"]`
 )
 
 // taggedName is a base domain (no _prefix labels) plus whether validDomainName
@@ -154,13 +148,9 @@ func testFilterState(t *rapid.T) {
 				if !ok {
 					return
 				}
-				queue := uint16(qDNSReqV4)
-				if ipv6 {
-					queue = qDNSReqV6
-				}
 
 				accept := !malformed && (connState == stateNew || connIsEstablished(connState)) && m.requestNameAllowed(parsed)
-				v, gotV := d.deliver(queue, connState, packet)
+				v, gotV := d.deliver(qDNSReq, connState, ipv6, packet)
 				assertVerdict(t, gotV, v, accept)
 
 				// model the connection store on accept (counting cache).
@@ -202,16 +192,12 @@ func testFilterState(t *rapid.T) {
 				if !ok {
 					return
 				}
-				queue := uint16(qInboundV4)
-				if ipv6 {
-					queue = qInboundV6
-				}
 
 				established := connIsEstablished(connState)
 				found := havePending && established
 				accept := found && !malformed && m.responseConditionalAccept(parsed)
 
-				v, gotV := d.deliver(queue, connState, packet)
+				v, gotV := d.deliver(qInbound, connState, ipv6, packet)
 				assertVerdict(t, gotV, v, accept)
 
 				if found {
@@ -231,17 +217,13 @@ func testFilterState(t *rapid.T) {
 			},
 			"traffic": func(t *rapid.T) {
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
-				queue := uint16(qTrafficV4)
-				if ipv6 {
-					queue = qTrafficV6
-				}
 
 				src := genTrafficIP(t, m, ipv6, "src")
 				dst := genTrafficIP(t, m, ipv6, "dst")
 				_, accept := m.allowedIPs[dst]
 
 				packet := buildTrafficPacket(t, ipv6, src, dst)
-				v, gotV := d.deliver(queue, drawConnState(t), packet)
+				v, gotV := d.deliver(qTraffic, drawConnState(t), ipv6, packet)
 				assertVerdict(t, gotV, v, accept)
 				settleAndCheck()
 			},
@@ -836,15 +818,21 @@ type driver struct {
 	packetID uint32
 }
 
-func (d *driver) deliver(queue uint16, connState uint32, packet []byte) (verdict int, gotVerdict bool) {
+func (d *driver) deliver(queue uint16, connState uint32, ipv6 bool, packet []byte) (verdict int, gotVerdict bool) {
 	d.packetID++
+
+	hwProto := uint16(unix.ETH_P_IP)
+	if ipv6 {
+		hwProto = uint16(unix.ETH_P_IPV6)
+	}
 
 	id := d.packetID
 	e := mockEnforcers[queue]
 	e.hook(nfqueue.Attribute{
-		PacketID: ref(id),
-		CtInfo:   ref(connState),
-		Payload:  ref(packet),
+		PacketID:   ref(id),
+		CtInfo:     ref(connState),
+		HwProtocol: ref(hwProto),
+		Payload:    ref(packet),
 	})
 
 	v, ok := e.verdicts[id]
