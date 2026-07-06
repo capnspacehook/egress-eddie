@@ -103,30 +103,27 @@ func main() {
 	}
 
 	// Try to apply landlock rules, preventing access to non-essential
-	// files. Only recent versions of the kernel support landlock (5.13+),
+	// files. Most recent versions of the kernel support landlock (5.13+),
 	// but we will ignore errors if the kernel itself does not support it.
-	// These rules can only be applied when egress-eddie does not need to make
-	// network connections, as currently it seems landlock does not support
-	// networking.
-	needsNetworking := config.ResolveWithDoH || config.SelfDNSQueue != 0
-	if !needsNetworking {
-		var allowedPaths []landlock.Rule
-		if *logPath != "stdout" && *logPath != "stderr" {
-			allowedPaths = []landlock.Rule{
-				landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
-			}
+	var allowedRules []landlock.Rule
+	if *logPath != "stdout" && *logPath != "stderr" {
+		allowedRules = []landlock.Rule{
+			landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
 		}
-
-		err = landlock.V9.BestEffort().RestrictPaths(
-			allowedPaths...,
-		)
-		if err != nil {
-			if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
-				logger.Fatal("creating landlock rules", zap.Error(err))
-			}
-		}
-		logger.Info("applied landlock rules")
 	}
+	if config.ResolveWithDoH {
+		allowedRules = append(allowedRules, landlock.ConnectTCP(443))
+	}
+
+	err = landlock.V9.BestEffort().Restrict(
+		allowedRules...,
+	)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
+			logger.Fatal("creating landlock rules", zap.Error(err))
+		}
+	}
+	logger.Info("applied landlock rules")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
@@ -148,6 +145,7 @@ func main() {
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of
 	// the process's lifetime.
+	needsNetworking := config.ResolveWithDoH || config.SelfDNSQueue != 0
 	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking, config.ResolveWithDoH)
 	if err != nil {
 		logger.Error("error setting seccomp rules", zap.Error(err))

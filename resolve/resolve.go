@@ -168,7 +168,7 @@ func (u *udpSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (dnsResp *
 
 			dnsResp, _, err = u.client.Exchange(ctx, dnsReq, "udp", addr)
 			if err == nil {
-				return dnsResp, err
+				return dnsResp, nil
 			}
 		}
 	}

@@ -418,14 +418,7 @@ func initBinaryFilters(t *testing.T, configStr string, iptablesRules []string) {
 		iptablesCmd(t, command)
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getting working directory: %v", err)
-	}
-	tracePath := filepath.Join(wd, "trace.txt")
-
-	// trace the binary so offending syscalls can be more easily found
-	eddieCmd := exec.Command("strace", "-f", "-o", tracePath, *eddieBinary, "-c", configPath, "-d", "-f")
+	eddieCmd := exec.Command(*eddieBinary, "-c", configPath, "-d", "-f")
 	eddieCmd.Stdout = os.Stdout
 	eddieCmd.Stderr = os.Stderr
 	eddieCmd.SysProcAttr = &syscall.SysProcAttr{
