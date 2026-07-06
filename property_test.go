@@ -15,7 +15,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
-	"github.com/florianl/go-nfqueue"
+	"github.com/florianl/go-nfqueue/v2"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"golang.org/x/sys/unix"

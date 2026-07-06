@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/anmitsu/go-shlex"
-	"github.com/florianl/go-nfqueue"
+	"github.com/florianl/go-nfqueue/v2"
 	"github.com/matryer/is"
 	"go.uber.org/goleak"
 	"go.uber.org/zap"

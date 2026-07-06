@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"codeberg.org/miekg/dns"
-	"github.com/florianl/go-nfqueue"
+	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
 )
 

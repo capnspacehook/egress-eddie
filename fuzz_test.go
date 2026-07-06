@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/florianl/go-nfqueue"
+	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
 	"pgregory.net/rapid"
 )

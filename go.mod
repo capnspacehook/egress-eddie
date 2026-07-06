@@ -6,8 +6,7 @@ require (
 	codeberg.org/miekg/dns v0.6.83
 	github.com/BurntSushi/toml v1.6.0
 	github.com/capnspacehook/glob v0.0.0-20260626023508-ee0ef131248e
-	// TODO: upgrade to v2
-	github.com/florianl/go-nfqueue v1.3.2
+	github.com/florianl/go-nfqueue/v2 v2.1.0
 	github.com/gopacket/gopacket v1.6.1
 	github.com/landlock-lsm/go-landlock v0.9.0
 	github.com/mdlayher/netlink v1.11.2
