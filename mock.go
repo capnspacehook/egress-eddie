@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"sync"
 
+	"codeberg.org/miekg/dns"
 	"github.com/florianl/go-nfqueue"
 	"go.uber.org/zap"
 )
@@ -63,31 +63,22 @@ func (m *mockEnforcer) Close() error {
 	return nil
 }
 
-type mockResolver struct {
+type mockSender struct {
 	addrs   map[string][]netip.Addr
 	domains map[string][]string
+
+	responsesValidated bool
 }
 
-func (m *mockResolver) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
-	if m.addrs == nil {
-		return nil, &net.DNSError{IsNotFound: true}
-	}
-
-	if addrs, ok := m.addrs[host]; ok {
-		return addrs, nil
-	}
-
-	return nil, &net.DNSError{IsNotFound: true}
+// TODO: implement
+func (m *mockSender) SendRequest(_ context.Context, _ *dns.Msg) (*dns.Msg, error) {
+	return nil, errors.New("not implemented")
 }
 
-func (m *mockResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
-	if m.domains == nil {
-		return nil, &net.DNSError{IsNotFound: true}
-	}
+func (m *mockSender) ResponsesValidated() bool {
+	return m.responsesValidated
+}
 
-	if addrs, ok := m.domains[addr]; ok {
-		return addrs, nil
-	}
-
-	return nil, &net.DNSError{IsNotFound: true}
+func (m *mockSender) TransportType() string {
+	return "mock"
 }

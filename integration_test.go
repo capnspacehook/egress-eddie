@@ -21,6 +21,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/sys/unix"
+
+	"github.com/capnspacehook/egress-eddie/resolve"
 )
 
 var (
@@ -195,48 +197,99 @@ allowAllDomains = true`
 func TestIntegrationCaching(t *testing.T) {
 	requireRoot(t)
 
-	configStr := `
+	tests := []struct {
+		name          string
+		configStr     string
+		iptablesRules []string
+	}{
+		{
+			name: "udp",
+			configStr: `
 inboundDNSQueue = 1
 selfDNSQueue = 100
+resolverIP = "1.1.1.1"
 
 [[filters]]
 name = "test"
 trafficQueue = 1001
 reCacheEvery = "1m"
 cachedDomains = [
-	"digitalocean.com",
-]`
+	"deb.debian.org",
+]
+cachedTargets = [
+	"debian.map.fastlydns.net",
+]`,
+			iptablesRules: []string{
+				"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
+				"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
+				"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
+				"-A OUTPUT -p tcp --dport 443 -m state --state NEW -j DROP",
+			},
+		}, {
+			name: "doh",
+			configStr: `
+inboundDNSQueue = 1
+selfDNSQueue = 100
+resolveWithDoH = true
+dohURL = "https://1.1.1.1"
+dohServerName = "one.one.one.one"
 
-	is := is.New(t)
-
-	addrs, err := net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "digitalocean.com")
-	is.NoErr(err)
-
-	initFilters(
-		t,
-		configStr,
-		[]string{
-			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
-			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
-			"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
+[[filters]]
+name = "test"
+trafficQueue = 1001
+reCacheEvery = "1m"
+cachedDomains = [
+	"deb.debian.org",
+]
+cachedTargets = [
+	"debian.map.fastlydns.net",
+]`,
+			iptablesRules: []string{
+				"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j DROP",
+				"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 100",
+				"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1001",
+			},
 		},
-	)
-	client4, _ := getHTTPClients()
-
-	// wait until domains responses are cached by filters
-	time.Sleep(3 * time.Second)
-
-	for _, addr := range addrs {
-		// skip IPv6 addresses, causes an error when preforming a GET request
-		addr = addr.Unmap()
-
-		resp, err := client4.Get("http://" + addr.String())
-		is.NoErr(err) // request to IP of cached domain should succeed
-		resp.Body.Close()
 	}
 
-	_, err = net.DefaultResolver.LookupNetIP(getTimeout(t), "ip4", "microsoft.com")
-	is.True(reqFailed(err)) // lookup of disallowed domain should fail
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			is := is.New(t)
+
+			// resolve IPs before the filters are setup
+			sender, err := resolve.NewUDPSender("1.1.1.1")
+			is.NoErr(err)
+
+			addrs, errs := resolve.Domain(getTimeout(t), "deb.debian.org", sender, nil)
+			is.True(len(errs) == 0)
+
+			initFilters(
+				t,
+				tt.configStr,
+				tt.iptablesRules,
+			)
+			client4, _ := getHTTPClients()
+
+			// wait until domains responses are cached by filters
+			time.Sleep(3 * time.Second)
+
+			for _, addr := range addrs {
+				// skip IPv6 addresses, causes an error when preforming a GET request
+				if addr.Is6() {
+					continue
+				}
+				addr = addr.Unmap()
+
+				resp, err := client4.Get("http://" + addr.String())
+				is.NoErr(err) // request to IP of cached domain should succeed
+				resp.Body.Close()
+			}
+
+			addrs, errs = resolve.Domain(getTimeout(t), "microsoft.com", sender, nil)
+			is.True(len(errs) > 0)   // lookup of disallowed domain should fail
+			is.True(len(addrs) == 0) // lookup of disallowed domain should return no IPs
+		})
+	}
 }
 
 func TestIntegrationFiltersStart(t *testing.T) {

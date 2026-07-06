@@ -3,6 +3,7 @@ package egresseddie
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
@@ -13,6 +14,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/capnspacehook/glob"
 	"github.com/capnspacehook/glob/syntax/lexer"
+
+	"github.com/capnspacehook/egress-eddie/resolve"
 )
 
 const (
@@ -24,16 +27,16 @@ const (
 type Config struct {
 	InboundDNSQueue uint16
 	SelfDNSQueue    uint16
-	DoHResolve      bool
+	ResolverIP      string
+	ResolveWithDoH  bool
 	DoHURL          string
 	DoHServerName   string
 	Filters         []FilterOptions
 
 	enforcerCreator enforcerCreator
-	resolver        resolver
+	sender          resolve.DNSSender
 }
 
-// TODO: add CachedTargets
 type FilterOptions struct {
 	Name            string
 	DNSQueue        uint16
@@ -44,6 +47,7 @@ type FilterOptions struct {
 	AllowedDomains  []string
 	AllowedTargets  []string
 	CachedDomains   []string
+	CachedTargets   []string
 
 	allowedDomainMatchers []glob.Glob
 	allowedTargetMatchers []glob.Glob
@@ -78,6 +82,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		return nil, errors.New(sb.String())
 	}
 
+	// check global options
 	if len(config.Filters) == 0 {
 		return nil, errors.New("at least one filter must be specified")
 	}
@@ -85,15 +90,25 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		return nil, errors.New(`"inboundDNSQueue" must be set`)
 	}
 
-	if !config.DoHResolve {
+	if !config.ResolveWithDoH {
+		if config.ResolverIP != "" {
+			if _, err := netip.ParseAddr(config.ResolverIP); err != nil {
+				return nil, fmt.Errorf(`parsing "resolverIP" %q: %w`, config.ResolverIP, err)
+			}
+		}
+
 		if config.DoHURL != "" {
-			return nil, errors.New(`"dohResolve" must be set when "dohURL" is set`)
+			return nil, errors.New(`"resolveWithDoH" must be set when "dohURL" is set`)
 		} else if config.DoHServerName != "" {
-			return nil, errors.New(`"dohResolve" must be set when "dohServerName" is set`)
+			return nil, errors.New(`"resolveWithDoH" must be set when "dohServerName" is set`)
 		}
 	} else {
+		if config.ResolverIP != "" {
+			return nil, errors.New(`"resolverIP" must not be set when "resolveWithDoH" is set`)
+		}
+
 		if config.DoHURL == "" {
-			return nil, errors.New(`"dohURL" must be set when "dohResolve" is set`)
+			return nil, errors.New(`"dohURL" must be set when "resolveWithDoH" is set`)
 		}
 		dohURL, err := url.Parse(config.DoHURL)
 		if err != nil {
@@ -112,13 +127,18 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 	var (
 		allCachedDomains []string
+		allCachedTargets []string
 		filterNames      = make(map[string]int)
 		filterQueues     = make(map[uint16]string)
 	)
 
+	// check individual filter options
 	for i, filterOpt := range config.Filters {
 		if filterOpt.Name == "" {
 			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
+		}
+		if filterOpt.Name == selfFilterName {
+			return nil, fmt.Errorf("filter #%d: filter name %q is reserved and must not be used", i, selfFilterName)
 		}
 
 		if filterOpt.DNSQueue == 0 && len(filterOpt.CachedDomains) == 0 {
@@ -163,6 +183,12 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 		if len(filterOpt.CachedDomains) > 0 && filterOpt.AllowAllDomains {
 			return nil, fmt.Errorf(`filter %q: "cachedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
+		}
+		if len(filterOpt.CachedTargets) > 0 && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "allowAllDomains" is true`, filterOpt.Name)
+		}
+		if len(filterOpt.CachedTargets) > 0 && len(filterOpt.CachedDomains) == 0 {
+			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "cachedDomains" is empty`, filterOpt.Name)
 		}
 		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedDomains) > 0 {
 			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedDomains" is not empty`, filterOpt.Name)
@@ -216,6 +242,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			if slices.Contains(filterOpt.CachedDomains, name) {
 				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
+			if slices.Contains(filterOpt.CachedTargets, name) {
+				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a target name to be cached as well", filterOpt.Name, name)
+			}
 			if j != len(filterOpt.AllowedTargets)-1 && slices.Contains(filterOpt.AllowedTargets[j+1:], name) {
 				return nil, fmt.Errorf("filter %q: allowed target name %q is specified more than once", filterOpt.Name, name)
 			}
@@ -235,6 +264,23 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			}
 		}
 
+		for j, name := range filterOpt.CachedTargets {
+			isPattern := strings.ContainsAny(name, globTokens)
+			if !isPattern {
+				if err := validLowerDomainName(name); err != nil {
+					return nil, fmt.Errorf("filter %q: target name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
+				}
+			}
+
+			if _, err := createDomainMatcher(name); err != nil {
+				return nil, fmt.Errorf("filter %q: compiling target name to be cached pattern %q: %w", filterOpt.Name, name, err)
+			}
+
+			if j != len(filterOpt.CachedTargets)-1 && slices.Contains(filterOpt.CachedTargets[j+1:], name) {
+				return nil, fmt.Errorf("filter %q: target name to be cached %q is specified more than once", filterOpt.Name, name)
+			}
+		}
+
 		if idx, ok := filterNames[filterOpt.Name]; ok {
 			return nil, fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
 		}
@@ -251,6 +297,9 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 
 		if len(filterOpt.CachedDomains) > 0 {
 			allCachedDomains = append(allCachedDomains, filterOpt.CachedDomains...)
+		}
+		if len(filterOpt.CachedTargets) > 0 {
+			allCachedTargets = append(allCachedTargets, filterOpt.CachedTargets...)
 		}
 
 		filterNames[filterOpt.Name] = i
@@ -289,17 +338,36 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			DNSQueue: config.SelfDNSQueue,
 		}
 
-		for _, name := range allCachedDomains {
-			m, err := createDomainMatcher(name)
-			if err != nil {
-				return nil, fmt.Errorf("compiling domain name to be cached pattern %q: %w", name, err)
+		if len(allCachedDomains) > 0 {
+			// this has no bearing on filtering logic, it's just so the
+			// config tests can assert the self-filter is build properly
+			selfFilter.AllowedDomains = allCachedDomains
+
+			selfFilter.allowedDomainMatchers = make([]glob.Glob, len(allCachedDomains))
+			for i, name := range allCachedDomains {
+				m, err := createDomainMatcher(name)
+				if err != nil {
+					return nil, fmt.Errorf("compiling domain name to be cached pattern %q: %w", name, err)
+				}
+
+				selfFilter.allowedDomainMatchers[i] = m
 			}
 
-			selfFilter.allowedDomainMatchers = append(selfFilter.allowedDomainMatchers, m)
 		}
+		if len(allCachedTargets) > 0 {
+			// this has no bearing on filtering logic, it's just so the
+			// config tests can assert the self-filter is build properly
+			selfFilter.AllowedTargets = allCachedTargets
 
-		if len(allCachedDomains) > 0 {
-			selfFilter.AllowedDomains = append(selfFilter.AllowedDomains, allCachedDomains...)
+			selfFilter.allowedTargetMatchers = make([]glob.Glob, len(allCachedTargets))
+			for i, name := range allCachedTargets {
+				m, err := createDomainMatcher(name)
+				if err != nil {
+					return nil, fmt.Errorf("compiling target name to be cached pattern %q: %w", name, err)
+				}
+
+				selfFilter.allowedTargetMatchers[i] = m
+			}
 		}
 
 		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)

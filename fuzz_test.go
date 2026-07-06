@@ -74,7 +74,7 @@ allowedDomains = [
 
 	initMockEnforcers()
 	config.enforcerCreator = newMockEnforcer
-	config.resolver = &mockResolver{}
+	config.sender = &mockSender{}
 
 	ctx, cancel := context.WithCancel(f.Context())
 	f.Cleanup(cancel)

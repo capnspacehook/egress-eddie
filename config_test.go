@@ -752,6 +752,10 @@ cachedDomains = [
 	"oof",
 	"rab",
 ]
+cachedTargets = [
+	"buf",
+	"ruz",
+]
 
 [[filters]]
 name = "test4"
@@ -762,9 +766,16 @@ allowAllDomains = true`,
 			SelfDNSQueue:    100,
 			Filters: []FilterOptions{
 				{
-					Name:           "self-filter",
-					DNSQueue:       100,
-					AllowedDomains: []string{"oof", "rab"},
+					Name:     "self-filter",
+					DNSQueue: 100,
+					AllowedDomains: []string{
+						"oof",
+						"rab",
+					},
+					AllowedTargets: []string{
+						"buf",
+						"ruz",
+					},
 				},
 				{
 					Name:            "test1",
@@ -783,6 +794,10 @@ allowAllDomains = true`,
 					CachedDomains: []string{
 						"oof",
 						"rab",
+					},
+					CachedTargets: []string{
+						"buf",
+						"ruz",
 					},
 				},
 				{
@@ -814,6 +829,7 @@ func TestParseConfig(t *testing.T) {
 				// clear matchers so we can compare the rest of the config
 				for i := range config.Filters {
 					config.Filters[i].allowedDomainMatchers = nil
+					config.Filters[i].allowedTargetMatchers = nil
 				}
 			}
 			is.Equal(tt.expectedConfig, config)

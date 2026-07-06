@@ -11,6 +11,8 @@ import (
 
 	"codeberg.org/miekg/dns"
 	"pgregory.net/rapid"
+
+	"github.com/capnspacehook/egress-eddie/resolve"
 )
 
 // storedReq mirrors what the request callback stores in f.connections
@@ -19,7 +21,7 @@ import (
 type storedReq struct {
 	requestInfo
 	count  int       // counting-cache count (0 == one outstanding)
-	expiry time.Time // now + propConnTimeout, refreshed on each Add
+	expiry time.Time // now + dnsQueryTimeout, refreshed on each Add
 }
 
 type model struct {
@@ -97,7 +99,7 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 	q := msg.Question[0]
 	qHdr := q.Header()
 
-	dl := m.now().Add(propConnTimeout)
+	dl := m.now().Add(resolve.DNSQueryTimeout)
 	if r, ok := m.pending[connID]; ok {
 		r.count++
 		r.expiry = dl

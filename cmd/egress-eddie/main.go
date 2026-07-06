@@ -95,7 +95,7 @@ func main() {
 
 	// Preload the system root certs if DoH is enabled so we don't have
 	// to allow reading these files in the landlock rules.
-	if config.DoHResolve {
+	if config.ResolveWithDoH {
 		_, err := x509.SystemCertPool()
 		if err != nil {
 			logger.Fatal("loading system certificates", zap.Error(err))
@@ -108,7 +108,7 @@ func main() {
 	// These rules can only be applied when egress-eddie does not need to make
 	// network connections, as currently it seems landlock does not support
 	// networking.
-	needsNetworking := config.DoHResolve || config.SelfDNSQueue != 0
+	needsNetworking := config.ResolveWithDoH || config.SelfDNSQueue != 0
 	if !needsNetworking {
 		var allowedPaths []landlock.Rule
 		if *logPath != "stdout" && *logPath != "stderr" {
@@ -148,7 +148,7 @@ func main() {
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of
 	// the process's lifetime.
-	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking, config.DoHResolve)
+	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking, config.ResolveWithDoH)
 	if err != nil {
 		logger.Error("error setting seccomp rules", zap.Error(err))
 		return

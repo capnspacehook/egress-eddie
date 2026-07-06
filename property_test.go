@@ -35,7 +35,6 @@ const (
 	disallowedDomain = "blocked.test"
 
 	propAllowAnswersFor = 10 * time.Second
-	propConnTimeout     = time.Minute // dnsQueryTimeout
 
 	// queue numbers for the single test filter
 	qInbound = 1
@@ -114,7 +113,7 @@ func testFilterState(t *rapid.T) {
 		}
 		initMockEnforcers()
 		config.enforcerCreator = newMockEnforcer
-		config.resolver = &mockResolver{}
+		config.sender = &mockSender{}
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
