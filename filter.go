@@ -760,6 +760,11 @@ func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
 	if len(resp.Question) == 0 {
 		return errors.New("no questions in DNS response")
 	}
+	if len(resp.Question) > 1 {
+		// drop DNS responses with more than one question; this is
+		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
+		return fmt.Errorf("%d questions in DNS response, expected 1", len(resp.Question))
+	}
 
 	// the response question should match the request's question
 	respQ := resp.Question[0]

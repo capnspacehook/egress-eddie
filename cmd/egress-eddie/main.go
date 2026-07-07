@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -112,7 +114,20 @@ func main() {
 		}
 	}
 	if config.ResolveWithDoH {
-		allowedRules = append(allowedRules, landlock.ConnectTCP(443))
+		u, err := url.Parse(config.DoHURL)
+		if err != nil {
+			logger.Fatal("parsing DoH URL", zap.Error(err))
+		}
+		port := uint16(443)
+		if portStr := u.Port(); portStr != "" {
+			p, err := strconv.ParseUint(portStr, 10, 16)
+			if err != nil {
+				logger.Fatal("parsing DoH URL port", zap.Error(err))
+			}
+			port = uint16(p)
+		}
+
+		allowedRules = append(allowedRules, landlock.ConnectTCP(port))
 	}
 
 	err = landlock.V9.BestEffort().Restrict(
@@ -122,8 +137,10 @@ func main() {
 		if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
 			logger.Fatal("creating landlock rules", zap.Error(err))
 		}
+		logger.Warn("unable to apply landlock rules, kernel not supported")
+	} else {
+		logger.Info("applied landlock rules")
 	}
-	logger.Info("applied landlock rules")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
