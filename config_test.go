@@ -116,19 +116,6 @@ reCacheEvery = "1s"`,
 		expectedErr:    `"inboundDNSQueue" and "selfDNSQueue" must be different`,
 	},
 	{
-		testName: "trafficQueue and AllowAllDomains set",
-		configStr: `
-inboundDNSQueue = 1
-
-[[filters]]
-name = "foo"
-dnsQueue = 1000
-trafficQueue = 1001
-allowAllDomains = true`,
-		expectedConfig: nil,
-		expectedErr:    `filter "foo": "trafficQueue" must not be set when "allowAllDomains" is true`,
-	},
-	{
 		testName: "allowedDomains empty",
 		configStr: `
 inboundDNSQueue = 1
@@ -148,6 +135,8 @@ inboundDNSQueue = 1
 [[filters]]
 name = "foo"
 dnsQueue = 1000
+trafficQueue = 1001
+allowAnswersFor = "5s"
 allowAllDomains = true
 allowedDomains = ["foo"]`,
 		expectedConfig: nil,
@@ -165,19 +154,6 @@ trafficQueue = 1001
 allowedDomains = ["foo"]`,
 		expectedConfig: nil,
 		expectedErr:    `filter "foo": "allowAnswersFor" must be set when "allowedDomains" is not empty`,
-	},
-	{
-		testName: "allowAllDomains set and allowAnswersFor is set",
-		configStr: `
-inboundDNSQueue = 1
-
-[[filters]]
-name = "foo"
-dnsQueue = 1000
-allowAnswersFor = "5s"
-allowAllDomains = true`,
-		expectedConfig: nil,
-		expectedErr:    `filter "foo": "allowAnswersFor" must not be set when "allowAllDomains" is true`,
 	},
 	{
 		testName: "negative allowAnswersFor",
@@ -200,6 +176,8 @@ inboundDNSQueue = 1
 
 [[filters]]
 name = "foo"
+trafficQueue = 1001
+allowAnswersFor = "5s"
 allowAllDomains = true
 cachedDomains = ["foo"]`,
 		expectedConfig: nil,
@@ -497,6 +475,8 @@ inboundDNSQueue = 1
 [[filters]]
 name = "foo"
 dnsQueue = 1000
+trafficQueue = 1001
+allowAnswersFor = "5s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: 1,
@@ -504,6 +484,8 @@ allowAllDomains = true`,
 				{
 					Name:            "foo",
 					DNSQueue:        1000,
+					TrafficQueue:    1001,
+					AllowAnswersFor: 5 * time.Second,
 					AllowAllDomains: true,
 				},
 			},
@@ -562,6 +544,8 @@ allowedDomains = [
 [[filters]]
 name = "bar"
 dnsQueue = 2000
+trafficQueue = 2001
+allowAnswersFor = "10s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: 1,
@@ -580,6 +564,8 @@ allowAllDomains = true`,
 				{
 					Name:            "bar",
 					DNSQueue:        2000,
+					TrafficQueue:    2001,
+					AllowAnswersFor: 10 * time.Second,
 					AllowAllDomains: true,
 				},
 			},
@@ -760,6 +746,8 @@ cachedTargets = [
 [[filters]]
 name = "test4"
 dnsQueue = 4000
+trafficQueue = 4001
+allowAnswersFor = "5s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
 			InboundDNSQueue: 1,
@@ -803,6 +791,8 @@ allowAllDomains = true`,
 				{
 					Name:            "test4",
 					DNSQueue:        4000,
+					TrafficQueue:    4001,
+					AllowAnswersFor: 5 * time.Second,
 					AllowAllDomains: true,
 				},
 			},

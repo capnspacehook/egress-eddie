@@ -170,28 +170,61 @@ allowedTargets = [
 func TestIntegrationAllowAll(t *testing.T) {
 	requireRoot(t)
 
-	configStr := `
-inboundDNSQueue = 1
-
+	const configFilters = `
 [[filters]]
 name = "test"
-dnsQueue = 1000
+dnsQueue = 100
+trafficQueue = 1000
+allowAnswersFor = "1m"
 allowAllDomains = true`
 
-	initFilters(
-		t,
-		configStr,
-		[]string{
-			"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
-			"-A OUTPUT -p udp --dport 53 -j NFQUEUE --queue-num 1000",
+	tests := []struct {
+		name          string
+		globalConfig  string
+		iptablesRules []string
+	}{
+		{
+			name: "udp",
+			globalConfig: `
+inboundDNSQueue = 1`,
+			iptablesRules: []string{
+				"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
+				"-A OUTPUT -p udp --dport 53 -m state --state NEW,ESTABLISHED -j NFQUEUE --queue-num 100",
+				"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1000",
+			},
+		}, {
+			name: "doh",
+			globalConfig: `
+inboundDNSQueue = 1
+resolveWithDoH = true
+dohURL = "https://1.1.1.1"
+dohServerName = "one.one.one.one"`,
+			iptablesRules: []string{
+				"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j ACCEPT",
+				"-A OUTPUT -p udp --dport 53 -m state --state NEW,ESTABLISHED -j NFQUEUE --queue-num 100",
+				"-A OUTPUT -p tcp --dport 80 -m state --state NEW -j NFQUEUE --queue-num 1000",
+			},
 		},
-	)
-	client4, client6 := getHTTPClients()
+	}
 
-	is := is.New(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			initFilters(
+				t,
+				tt.globalConfig+configFilters,
+				tt.iptablesRules,
+			)
+			client4, client6 := getHTTPClients()
 
-	err := makeHTTPReqs(client4, client6, "https://harmony.shinesparkers.net")
-	is.NoErr(err) // request to domain should succeed
+			is := is.New(t)
+
+			err := makeHTTPReqs(client4, client6, "http://harmony.shinesparkers.net")
+			is.NoErr(err) // request to domain should succeed
+
+			err = makeHTTPReqs(client4, client6, "http://1.1.1.1")
+			is.True(reqFailed(err)) // request to IP not from DNS response should fail
+		})
+	}
 }
 
 func TestIntegrationCaching(t *testing.T) {

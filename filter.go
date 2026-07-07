@@ -575,20 +575,6 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			// allow request if all domains are allowed
-			if f.opts.AllowAllDomains {
-				ri, err := newRequestInfo(reqMsg)
-				if err != nil {
-					logger.Error("dropping DNS request", f.dropReasonFields(err, reqMsg)...)
-					return dropVerdict
-				}
-
-				logger.Info("allowing DNS request", dnsFields(reqMsg, f.fullDNSLogging)...)
-				logger.Debug("adding connection")
-				f.connections.AddValue(connID, ri, resolve.DNSQueryTimeout)
-				return acceptVerdict
-			}
-
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
 			ri, err := f.validateDNSQuestion(reqMsg)
@@ -616,7 +602,7 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 				// the original request. The sender won't know we dropped
 				// it as UDP is stateless, and we already got a response
 				// using DoH so this plaintext request doesn't need to
-				// reach the resoler.
+				// reach the resolver.
 				return dropVerdict
 			}
 
@@ -927,6 +913,11 @@ func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 		return false, err
 	}
 
+	// if all domains are allowed we don't need to check anything else
+	if f.opts.AllowAllDomains {
+		return true, nil
+	}
+
 	lowerDomain := prepareDomainName(domain)
 	f.logger.Debug("checking if domain is allowed", zap.String("domain", lowerDomain))
 
@@ -1091,7 +1082,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 
 			// allow DNS response if the filter it came from is the self
 			// filter, all domains are allowed, or if there are no answers
-			if connFilter.opts.AllowAllDomains || len(respMsg.Answer) == 0 {
+			if len(respMsg.Answer) == 0 {
 				logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 				return acceptVerdict
 			}

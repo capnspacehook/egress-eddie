@@ -151,11 +151,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
 		}
 
-		if filterOpt.TrafficQueue == 0 && !filterOpt.AllowAllDomains {
+		if filterOpt.TrafficQueue == 0 {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
-		}
-		if filterOpt.TrafficQueue != 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "trafficQueue" must not be set when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if config.InboundDNSQueue == filterOpt.TrafficQueue {
 			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "trafficQueue" must be different`, filterOpt.Name)
@@ -174,19 +171,21 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.AllowAnswersFor == 0 && len(filterOpt.AllowedDomains) > 0 {
 			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowedDomains" is not empty`, filterOpt.Name)
 		}
-		if filterOpt.AllowAnswersFor != 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be set when "allowAllDomains" is true`, filterOpt.Name)
+		if filterOpt.AllowAnswersFor == 0 && filterOpt.AllowAllDomains {
+			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if filterOpt.AllowAnswersFor < 0 {
 			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be negative`, filterOpt.Name)
 		}
 
+		// TODO: this might be a valid config
 		if len(filterOpt.CachedDomains) > 0 && filterOpt.AllowAllDomains {
 			return nil, fmt.Errorf(`filter %q: "cachedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if len(filterOpt.CachedTargets) > 0 && filterOpt.AllowAllDomains {
 			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
+
 		if len(filterOpt.CachedTargets) > 0 && len(filterOpt.CachedDomains) == 0 {
 			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "cachedDomains" is empty`, filterOpt.Name)
 		}
