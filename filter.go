@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"code.dny.dev/ssrf"
 	"codeberg.org/miekg/dns"
 	"github.com/florianl/go-nfqueue/v2"
 	"github.com/gopacket/gopacket"
@@ -79,6 +80,8 @@ type filter struct {
 
 	dnsReqNF  enforcer
 	genericNF enforcer
+
+	addrChecker *ssrf.Guardian
 
 	sender   resolve.DNSSender
 	injector *resolve.DNSInjector
@@ -313,6 +316,33 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 				f.cacheDomains(ctx, filterLogger, validateResp)
 			})
 		}
+
+		var allowedIPv4Prefixes []netip.Prefix
+		var allowedIPv6Prefixes []netip.Prefix
+		for _, prefix := range f.opts.AllowedAnswerCIDRs {
+			if prefix.Addr().Is4() {
+				allowedIPv4Prefixes = append(allowedIPv4Prefixes, prefix)
+			} else {
+				allowedIPv6Prefixes = append(allowedIPv6Prefixes, prefix)
+			}
+		}
+
+		disallowedIPv4Prefixes := slices.Clone(ssrf.IPv4DeniedPrefixes)
+		disallowedIPv6Prefixes := slices.Clone(ssrf.IPv6DeniedPrefixes)
+		for _, prefix := range f.opts.DisallowedAnswerCIDRs {
+			if prefix.Addr().Is4() {
+				disallowedIPv4Prefixes = append(disallowedIPv4Prefixes, prefix)
+			} else {
+				disallowedIPv6Prefixes = append(disallowedIPv6Prefixes, prefix)
+			}
+		}
+
+		f.addrChecker = ssrf.New(
+			ssrf.WithAllowedV4Prefixes(allowedIPv4Prefixes...),
+			ssrf.WithAllowedV6Prefixes(allowedIPv6Prefixes...),
+			ssrf.WithDeniedV4Prefixes(disallowedIPv4Prefixes...),
+			ssrf.WithDeniedV6Prefixes(disallowedIPv6Prefixes...),
+		)
 	}
 
 	if opts.DNSQueue != 0 {
@@ -385,6 +415,39 @@ func (f *filter) start() {
 	}
 
 	f.started = true
+}
+
+func (f *filter) close() {
+	// if the filter has not been started yet, tell running goroutines
+	// to abort and finish
+	if !f.started {
+		if f.opts.DNSQueue != 0 {
+			f.dnsReqSignaler.abort()
+		}
+		if f.opts.TrafficQueue != 0 {
+			f.genericSignaler.abort()
+		}
+		if len(f.opts.CachedDomains) > 0 {
+			f.cachingSignaler.abort()
+		}
+	}
+
+	f.wg.Wait()
+
+	if f.dnsReqNF != nil {
+		f.dnsReqNF.Close()
+	}
+	if f.genericNF != nil {
+		f.genericNF.Close()
+	}
+
+	f.connections.Stop()
+	if f.allowedIPs != nil {
+		f.allowedIPs.Stop()
+	}
+	if f.additionalDomains != nil {
+		f.additionalDomains.Stop()
+	}
 }
 
 // validateDNSResponse validates a DNS response against a DNS request.
@@ -479,39 +542,6 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 			return
 		case <-timer.C:
 		}
-	}
-}
-
-func (f *filter) close() {
-	// if the filter has not been started yet, tell running goroutines
-	// to abort and finish
-	if !f.started {
-		if f.opts.DNSQueue != 0 {
-			f.dnsReqSignaler.abort()
-		}
-		if f.opts.TrafficQueue != 0 {
-			f.genericSignaler.abort()
-		}
-		if len(f.opts.CachedDomains) > 0 {
-			f.cachingSignaler.abort()
-		}
-	}
-
-	f.wg.Wait()
-
-	if f.dnsReqNF != nil {
-		f.dnsReqNF.Close()
-	}
-	if f.genericNF != nil {
-		f.genericNF.Close()
-	}
-
-	f.connections.Stop()
-	if f.allowedIPs != nil {
-		f.allowedIPs.Stop()
-	}
-	if f.additionalDomains != nil {
-		f.additionalDomains.Stop()
 	}
 }
 
@@ -820,10 +850,16 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 			if !answer.Addr.Is4() {
 				return fmt.Errorf("IP address %s in A answer is not an IPv4 address", answer.Addr)
 			}
+			if err := f.addrChecker.SafeAddr(answer.Addr); err != nil {
+				return fmt.Errorf("IP address in A answer: %w", err)
+			}
 			emptyTarget = true
 		case *dns.AAAA:
 			if !answer.Addr.Is6() {
 				return fmt.Errorf("IP address %s in AAAA answer is not an IPv6 address", answer.Addr)
+			}
+			if err := f.addrChecker.SafeAddr(answer.Addr); err != nil {
+				return fmt.Errorf("IP address in AAAA answer: %w", err)
 			}
 			emptyTarget = true
 		case *dns.CNAME:

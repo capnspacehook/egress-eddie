@@ -44,10 +44,14 @@ type FilterOptions struct {
 	AllowAllDomains bool
 	AllowAnswersFor time.Duration
 	ReCacheEvery    time.Duration
-	AllowedDomains  []string
-	AllowedTargets  []string
-	CachedDomains   []string
-	CachedTargets   []string
+
+	AllowedDomains []string
+	AllowedTargets []string
+	CachedDomains  []string
+	CachedTargets  []string
+
+	AllowedAnswerCIDRs    []netip.Prefix
+	DisallowedAnswerCIDRs []netip.Prefix
 
 	allowedDomainMatchers []glob.Glob
 	allowedTargetMatchers []glob.Glob
@@ -216,7 +220,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			if slices.Contains(filterOpt.CachedDomains, name) {
 				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
-			if j != len(filterOpt.AllowedDomains)-1 && slices.Contains(filterOpt.AllowedDomains[j+1:], name) {
+			if containsAfter(filterOpt.AllowedDomains, name, j) {
 				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
@@ -244,7 +248,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			if slices.Contains(filterOpt.CachedTargets, name) {
 				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a target name to be cached as well", filterOpt.Name, name)
 			}
-			if j != len(filterOpt.AllowedTargets)-1 && slices.Contains(filterOpt.AllowedTargets[j+1:], name) {
+			if containsAfter(filterOpt.AllowedTargets, name, j) {
 				return nil, fmt.Errorf("filter %q: allowed target name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
@@ -258,7 +262,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			if err := validLowerDomainName(name); err != nil {
 				return nil, fmt.Errorf("filter %q: domain name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
 			}
-			if j != len(filterOpt.CachedDomains)-1 && slices.Contains(filterOpt.CachedDomains[j+1:], name) {
+			if containsAfter(filterOpt.CachedDomains, name, j) {
 				return nil, fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
@@ -275,8 +279,28 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 				return nil, fmt.Errorf("filter %q: compiling target name to be cached pattern %q: %w", filterOpt.Name, name, err)
 			}
 
-			if j != len(filterOpt.CachedTargets)-1 && slices.Contains(filterOpt.CachedTargets[j+1:], name) {
+			if containsAfter(filterOpt.CachedTargets, name, j) {
 				return nil, fmt.Errorf("filter %q: target name to be cached %q is specified more than once", filterOpt.Name, name)
+			}
+		}
+
+		for j, cidr := range filterOpt.AllowedAnswerCIDRs {
+			if containsAfter(filterOpt.AllowedAnswerCIDRs, cidr, j) {
+				return nil, fmt.Errorf("filter %q: allowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
+			}
+		}
+		for j, cidr := range filterOpt.DisallowedAnswerCIDRs {
+			for _, allowedCIDR := range filterOpt.AllowedAnswerCIDRs {
+				if allowedCIDR == cidr {
+					return nil, fmt.Errorf("filter %q: allowed and disallowed answer CIDRs %s are the same", filterOpt.Name, cidr)
+				}
+				if allowedCIDR.Contains(cidr.Addr()) {
+					return nil, fmt.Errorf("filter %q: disallowed answer CIDR %s overlaps with allowed answer CIDR %s", filterOpt.Name, cidr, allowedCIDR)
+				}
+			}
+
+			if containsAfter(filterOpt.AllowedAnswerCIDRs, cidr, j) {
+				return nil, fmt.Errorf("filter %q: disallowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
 			}
 		}
 
@@ -482,4 +506,11 @@ func validDomainRune(r rune) bool {
 		return true
 	}
 	return false
+}
+
+func containsAfter[T comparable](s []T, v T, i int) bool {
+	if i == len(s)-1 {
+		return false
+	}
+	return slices.Contains(s[i+1:], v)
 }

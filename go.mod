@@ -3,6 +3,7 @@ module github.com/capnspacehook/egress-eddie
 go 1.26.4
 
 require (
+	code.dny.dev/ssrf v0.3.0
 	codeberg.org/miekg/dns v0.6.83
 	github.com/BurntSushi/toml v1.6.0
 	github.com/capnspacehook/glob v0.0.0-20260626023508-ee0ef131248e
