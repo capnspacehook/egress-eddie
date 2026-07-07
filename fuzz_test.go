@@ -9,6 +9,7 @@ import (
 
 	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
 )
 
@@ -49,7 +50,8 @@ func FuzzVerdicts(f *testing.F) {
 			f.Fatalf("error reading file: %v", err)
 		}
 
-		f.Add(b, uint8(i%stateRelatedReply))
+		f.Add(b, uint8(i%stateRelatedReply), false)
+		f.Add(b, uint8(i%stateRelatedReply), true)
 	}
 
 	logger := createLogger(f)
@@ -91,15 +93,21 @@ allowedDomains = [
 	}
 
 	packetID := uint32(1)
-	f.Fuzz(func(t *testing.T, packet []byte, connState uint8) {
+	f.Fuzz(func(t *testing.T, packet []byte, connState uint8, ipv6 bool) {
 		allowedIPsLen := filters.filters[0].allowedIPs.Len()
 		additionalDomainsLen := filters.filters[0].additionalDomains.Len()
 
+		hwProto := uint16(unix.ETH_P_IP)
+		if ipv6 {
+			hwProto = uint16(unix.ETH_P_IPV6)
+		}
+
 		for i, queue := range dnsQueues {
 			mockEnforcers[queue].hook(nfqueue.Attribute{
-				PacketID: new(packetID),
-				CtInfo:   new(uint32(connState)),
-				Payload:  new(packet),
+				PacketID:   new(packetID),
+				CtInfo:     new(uint32(connState)),
+				HwProtocol: new(hwProto),
+				Payload:    new(packet),
 			})
 
 			// DNS request filters should never add IPs or domains
