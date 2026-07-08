@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"code.dny.dev/ssrf"
 	"codeberg.org/miekg/dns"
 	"pgregory.net/rapid"
 
@@ -25,19 +26,19 @@ type storedReq struct {
 }
 
 type model struct {
-	now             func() time.Time
 	pending         map[connectionID]*storedReq
+	addrChecker     *ssrf.Guardian
 	allowedIPs      map[netip.Addr]time.Time // value == expiry deadline
-	additionalDoms  map[string]time.Time     // value == expiry deadline
+	targetDomains   map[string]time.Time     // value == expiry deadline
 	allowAnswersFor time.Duration
 }
 
-func newModel(now func() time.Time) *model {
+func newModel(ac *ssrf.Guardian) *model {
 	return &model{
-		now:             now,
 		pending:         make(map[connectionID]*storedReq),
+		addrChecker:     ac,
 		allowedIPs:      make(map[netip.Addr]time.Time),
-		additionalDoms:  make(map[string]time.Time),
+		targetDomains:   make(map[string]time.Time),
 		allowAnswersFor: propAllowAnswersFor,
 	}
 }
@@ -45,15 +46,15 @@ func newModel(now func() time.Time) *model {
 // prune drops modeled entries whose deadline has passed. Call after
 // synctest.Wait() so it lines up with the real cache's timer goroutines.
 func (m *model) prune() {
-	now := m.now()
+	now := time.Now()
 	for k, dl := range m.allowedIPs {
 		if !dl.After(now) {
 			delete(m.allowedIPs, k)
 		}
 	}
-	for k, dl := range m.additionalDoms {
+	for k, dl := range m.targetDomains {
 		if !dl.After(now) {
-			delete(m.additionalDoms, k)
+			delete(m.targetDomains, k)
 		}
 	}
 	for k, r := range m.pending {
@@ -73,10 +74,10 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 		}
 	}
 
-	if got := f.allowedTargets.Len(); got != len(m.additionalDoms) {
-		t.Fatalf("additionalDomains size: model=%d real=%d", len(m.additionalDoms), got)
+	if got := f.allowedTargets.Len(); got != len(m.targetDomains) {
+		t.Fatalf("additionalDomains size: model=%d real=%d", len(m.targetDomains), got)
 	}
-	for dom := range m.additionalDoms {
+	for dom := range m.targetDomains {
 		if !f.allowedTargets.Exists(dom) {
 			t.Fatalf("additionalDomains missing modeled domain %q", dom)
 		}
@@ -99,7 +100,7 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 	q := msg.Question[0]
 	qHdr := q.Header()
 
-	dl := m.now().Add(resolve.DNSQueryTimeout)
+	dl := time.Now().Add(resolve.DNSQueryTimeout)
 	if r, ok := m.pending[connID]; ok {
 		r.count++
 		r.expiry = dl
@@ -153,7 +154,7 @@ func (m *model) domainAllowed(name string) bool {
 	if inAllowedDomains(n) {
 		return true
 	}
-	_, ok := m.additionalDoms[n]
+	_, ok := m.targetDomains[n]
 	return ok
 }
 
@@ -200,7 +201,7 @@ func (m *model) targetAllowed(target string) bool {
 	if inAllowedTargets(n) || inAllowedDomains(n) {
 		return true
 	}
-	_, ok := m.additionalDoms[n]
+	_, ok := m.targetDomains[n]
 	return ok
 }
 
@@ -264,6 +265,16 @@ func (m *model) answersValid(msg *dns.Msg) bool {
 			return false // disallowed RR type (TXT, unknown, ...) -> drop reply
 		}
 		if !targetBearing {
+			switch ans := a.(type) {
+			case *dns.A:
+				if err := m.addrChecker.SafeAddr(ans.Addr); err != nil {
+					return false
+				}
+			case *dns.AAAA:
+				if err := m.addrChecker.SafeAddr(ans.Addr); err != nil {
+					return false
+				}
+			}
 			continue // A/AAAA: no target to validate
 		}
 		if target == "" {
@@ -277,12 +288,13 @@ func (m *model) answersValid(msg *dns.Msg) bool {
 		}
 		accumulated = append(accumulated, norm(target))
 	}
+
 	return true
 }
 
 // answerSideEffects mirrors the side-effect loop of the response callback.
 // Only valid to call on a fully-accepted reply.
-func answerSideEffects(msg *dns.Msg) (addIPs []netip.Addr, addDoms []string) {
+func answerSideEffects(msg *dns.Msg) (addIPs []netip.Addr, addTargets []string) {
 	for _, a := range msg.Answer {
 		switch ans := a.(type) {
 		case *dns.A:
@@ -294,11 +306,12 @@ func answerSideEffects(msg *dns.Msg) (addIPs []netip.Addr, addDoms []string) {
 			}
 		default:
 			if t, tb, _ := rrTarget(a); tb && t != "" && t != "." {
-				addDoms = append(addDoms, norm(t))
+				addTargets = append(addTargets, norm(t))
 			}
 		}
 	}
-	return addIPs, addDoms
+
+	return addIPs, addTargets
 }
 
 // rrTarget mirrors the type switch in validateDNSAnswers exactly.

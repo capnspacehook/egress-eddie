@@ -116,6 +116,13 @@ func GenIPv4Addr() *rapid.Generator[netip.Addr] {
 	})
 }
 
+func GenIPv4Prefix() *rapid.Generator[netip.Prefix] {
+	return rapid.Custom(func(t *rapid.T) netip.Prefix {
+		addr := GenIPv4Addr().Draw(t, "ipv4Addr")
+		return netip.PrefixFrom(addr, rapid.IntRange(0, addr.BitLen()).Draw(t, "bitLen"))
+	})
+}
+
 func GenIPv6Addr() *rapid.Generator[netip.Addr] {
 	return rapid.Custom(func(t *rapid.T) netip.Addr {
 		var buf [16]byte
@@ -123,6 +130,13 @@ func GenIPv6Addr() *rapid.Generator[netip.Addr] {
 			buf[i] = rapid.Byte().Draw(t, "b")
 		}
 		return netip.AddrFrom16(buf)
+	})
+}
+
+func GenIPv6Prefix() *rapid.Generator[netip.Prefix] {
+	return rapid.Custom(func(t *rapid.T) netip.Prefix {
+		addr := GenIPv6Addr().Draw(t, "ipv4Addr")
+		return netip.PrefixFrom(addr, rapid.IntRange(0, addr.BitLen()).Draw(t, "bitLen"))
 	})
 }
 

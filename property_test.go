@@ -115,11 +115,31 @@ func testFilterState(t *rapid.T) {
 		config.enforcerCreator = newMockEnforcer
 		config.sender = &mockSender{}
 
-		// Allow all IPs in answers by allowing the default deny CIDRs
-		config.Filters[0].AllowedAnswerCIDRs = []netip.Prefix{
-			netip.MustParsePrefix("0.0.0.0/0"),
-			netip.MustParsePrefix("::/0"),
+		// setup answer IP filtering
+		allowedCIDRs := make([]netip.Prefix, rapid.IntRange(0, 3).Draw(t, "allowedCIDRs"))
+		for i := range allowedCIDRs {
+			var pfx netip.Prefix
+			if rapid.Bool().Draw(t, "ipv6") {
+				pfx = GenIPv6Prefix().Draw(t, "allowedIPv6CIDR")
+			} else {
+				pfx = GenIPv4Prefix().Draw(t, "allowedIPv4CIDR")
+			}
+			t.Logf("allowedCIDR: %s", pfx)
+			allowedCIDRs[i] = pfx
 		}
+		disallowedCIDRs := make([]netip.Prefix, rapid.IntRange(0, 3).Draw(t, "disallowedCIDRs"))
+		for i := range disallowedCIDRs {
+			var pfx netip.Prefix
+			if rapid.Bool().Draw(t, "ipv6") {
+				pfx = GenIPv6Prefix().Draw(t, "disallowedIPv6CIDR")
+			} else {
+				pfx = GenIPv4Prefix().Draw(t, "disallowedIPv4CIDR")
+			}
+			t.Logf("disallowedCIDR: %s", pfx)
+			disallowedCIDRs[i] = pfx
+		}
+		config.Filters[0].AllowedAnswerCIDRs = allowedCIDRs
+		config.Filters[0].DisallowedAnswerCIDRs = disallowedCIDRs
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -132,7 +152,7 @@ func testFilterState(t *rapid.T) {
 		t.Cleanup(fm.Stop)
 
 		f := fm.filters[0]
-		m := newModel(time.Now)
+		m := newModel(f.addrChecker)
 		d := &driver{}
 
 		settleAndCheck := func() {
@@ -209,13 +229,13 @@ func testFilterState(t *rapid.T) {
 					m.removePending(connID)
 				}
 				if accept {
-					dl := m.now().Add(m.allowAnswersFor)
+					dl := time.Now().Add(m.allowAnswersFor)
 					addIPs, addDoms := answerSideEffects(parsed)
 					for _, ip := range addIPs {
 						m.allowedIPs[ip] = dl
 					}
 					for _, dom := range addDoms {
-						m.additionalDoms[dom] = dl
+						m.targetDomains[dom] = dl
 					}
 				}
 				settleAndCheck()
