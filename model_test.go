@@ -73,11 +73,11 @@ func (m *model) assertCaches(t *rapid.T, f *filter) {
 		}
 	}
 
-	if got := f.additionalDomains.Len(); got != len(m.additionalDoms) {
+	if got := f.allowedTargets.Len(); got != len(m.additionalDoms) {
 		t.Fatalf("additionalDomains size: model=%d real=%d", len(m.additionalDoms), got)
 	}
 	for dom := range m.additionalDoms {
-		if !f.additionalDomains.Exists(dom) {
+		if !f.allowedTargets.Exists(dom) {
 			t.Fatalf("additionalDomains missing modeled domain %q", dom)
 		}
 	}

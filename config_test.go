@@ -26,15 +26,15 @@ var configTests = []struct {
 		expectedErr:    "at least one filter must be specified",
 	},
 	{
-		testName:       "inboundDNSQueue not set",
+		testName:       "dnsResponseQueue not set",
 		configStr:      "[[filters]]",
 		expectedConfig: nil,
-		expectedErr:    `"inboundDNSQueue" must be set`,
+		expectedErr:    `"dnsResponseQueue" must be set`,
 	},
 	{
 		testName: "name not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]`,
 		expectedConfig: nil,
@@ -43,7 +43,7 @@ inboundDNSQueue = 1
 	{
 		testName: "dnsQueue not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"`,
@@ -51,21 +51,21 @@ name = "foo"`,
 		expectedErr:    `filter "foo": "dnsQueue" must be set`,
 	},
 	{
-		testName: "inboundDNSQueue and dnsQueue same",
+		testName: "dnsResponseQueue and dnsQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
 dnsQueue = 1
 		`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "inboundDNSQueue" and "dnsQueue" must be different`,
+		expectedErr:    `filter "foo": "dnsResponseQueue" and "dnsQueue" must be different`,
 	},
 	{
 		testName: "trafficQueue not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -74,9 +74,9 @@ dnsQueue = 1000`,
 		expectedErr:    `filter "foo": "trafficQueue" must be set`,
 	},
 	{
-		testName: "inboundDNSQueue and trafficQueue same",
+		testName: "dnsResponseQueue and trafficQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -84,12 +84,12 @@ dnsQueue = 1000
 trafficQueue = 1
 		`,
 		expectedConfig: nil,
-		expectedErr:    `filter "foo": "inboundDNSQueue" and "trafficQueue" must be different`,
+		expectedErr:    `filter "foo": "dnsResponseQueue" and "trafficQueue" must be different`,
 	},
 	{
 		testName: "dnsQueue and trafficQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -99,9 +99,9 @@ trafficQueue = 1000`,
 		expectedErr:    `filter "foo": "dnsQueue" and "trafficQueue" must be different`,
 	},
 	{
-		testName: "inboundDNSQueue and selfDNSQueue same",
+		testName: "dnsResponseQueue and selfDNSQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 1
 
 [[filters]]
@@ -113,12 +113,12 @@ allowedDomains = ["foo"]
 cachedDomains = ["bar"]
 reCacheEvery = "1s"`,
 		expectedConfig: nil,
-		expectedErr:    `"inboundDNSQueue" and "selfDNSQueue" must be different`,
+		expectedErr:    `"dnsResponseQueue" and "selfDNSQueue" must be different`,
 	},
 	{
 		testName: "allowedDomains empty",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -130,7 +130,7 @@ trafficQueue = 1001`,
 	{
 		testName: "allowedDomains not empty and allowAllDomains is set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -145,7 +145,7 @@ allowedDomains = ["foo"]`,
 	{
 		testName: "allowedDomains not empty and allowAnswersFor is not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -158,7 +158,7 @@ allowedDomains = ["foo"]`,
 	{
 		testName: "negative allowAnswersFor",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -172,7 +172,7 @@ allowedDomains = ["foo"]`,
 	{
 		testName: "cachedDomains not empty and allowAllDomains is set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -186,7 +186,7 @@ cachedDomains = ["foo"]`,
 	{
 		testName: "cachedDomains not empty and reCacheEvery is not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -198,7 +198,7 @@ cachedDomains = ["foo"]`,
 	{
 		testName: "cachedDomains empty and reCacheEvery is set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -213,7 +213,7 @@ allowedDomains = ["foo"]`,
 	{
 		testName: "negative reCacheEvery",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -226,7 +226,7 @@ cachedDomains = ["foo"]`,
 	{
 		testName: "dnsQueue set and cachedDomains not empty",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -241,7 +241,7 @@ cachedDomains = ["foo"]`,
 	{
 		testName: "selfDNSQueue set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -256,7 +256,7 @@ allowedDomains = ["foo"]`,
 	{
 		testName: "invalid allowed domain name",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -271,7 +271,7 @@ allowedDomains = [""]`,
 	{
 		testName: "shared allowed and cached domain name",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -288,7 +288,7 @@ cachedDomains = ["foo"]`,
 	{
 		testName: "duplicate allowed domain name",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -306,7 +306,7 @@ allowedDomains = [
 	{
 		testName: "invalid cached domain name",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -320,7 +320,7 @@ cachedDomains = [""]`,
 	{
 		testName: "duplicate cached domain name",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -337,7 +337,7 @@ cachedDomains = [
 	{
 		testName: "duplicate filter names",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -359,7 +359,7 @@ allowedDomains = ["bar"]`,
 	{
 		testName: "duplicate dnsQueues",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -381,7 +381,7 @@ allowedDomains = ["bar"]`,
 	{
 		testName: "duplicate trafficQueues",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -403,7 +403,7 @@ allowedDomains = ["bar"]`,
 	{
 		testName: "selfDNSQueue and dnsQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -420,7 +420,7 @@ reCacheEvery = "1s"`,
 	{
 		testName: "selfDNSQueue and trafficQueue same",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -437,7 +437,7 @@ reCacheEvery = "1s"`,
 	{
 		testName: "allowedDomain with uppercase characters",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -454,7 +454,7 @@ allowedDomains = [
 	{
 		testName: "cachedDomain with pattern",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -470,7 +470,7 @@ cachedDomains = [
 	{
 		testName: "valid allowAllDomains is set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -479,7 +479,7 @@ trafficQueue = 1001
 allowAnswersFor = "5s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
+			DNSResponseQueue: 1,
 			Filters: []FilterOptions{
 				{
 					Name:            "foo",
@@ -495,7 +495,7 @@ allowAllDomains = true`,
 	{
 		testName: "valid allowAllDomains is not set",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -508,7 +508,7 @@ allowedDomains = [
 	"baz.barf",
 ]`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
+			DNSResponseQueue: 1,
 			Filters: []FilterOptions{
 				{
 					Name:            "foo",
@@ -528,7 +528,7 @@ allowedDomains = [
 	{
 		testName: "valid allowAllDomains mixed",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "foo"
@@ -548,7 +548,7 @@ trafficQueue = 2001
 allowAnswersFor = "10s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
+			DNSResponseQueue: 1,
 			Filters: []FilterOptions{
 				{
 					Name:            "foo",
@@ -575,7 +575,7 @@ allowAllDomains = true`,
 	{
 		testName: "valid cachedDomains",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -587,8 +587,8 @@ cachedDomains = [
 	"rab",
 ]`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
-			SelfDNSQueue:    100,
+			DNSResponseQueue: 1,
+			SelfDNSQueue:     100,
 			Filters: []FilterOptions{
 				{
 					Name:     selfFilterName,
@@ -614,7 +614,7 @@ cachedDomains = [
 	{
 		testName: "valid allowedDomains and cachedDomains",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -633,8 +633,8 @@ allowedDomains = [
 	"baz.barf",
 ]`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
-			SelfDNSQueue:    100,
+			DNSResponseQueue: 1,
+			SelfDNSQueue:     100,
 			Filters: []FilterOptions{
 				{
 					Name:     selfFilterName,
@@ -667,7 +667,7 @@ allowedDomains = [
 	{
 		testName: "cachedDomains is not empty",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -686,8 +686,8 @@ allowedDomains = [
 	"baz.barf",
 ]`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
-			SelfDNSQueue:    100,
+			DNSResponseQueue: 1,
+			SelfDNSQueue:     100,
 			Filters: []FilterOptions{
 				{
 					Name:           selfFilterName,
@@ -717,7 +717,7 @@ allowedDomains = [
 	{
 		testName: "valid multiple filters",
 		configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 
 [[filters]]
@@ -750,8 +750,8 @@ trafficQueue = 4001
 allowAnswersFor = "5s"
 allowAllDomains = true`,
 		expectedConfig: &Config{
-			InboundDNSQueue: 1,
-			SelfDNSQueue:    100,
+			DNSResponseQueue: 1,
+			SelfDNSQueue:     100,
 			Filters: []FilterOptions{
 				{
 					Name:     "self-filter",

@@ -25,13 +25,13 @@ const (
 )
 
 type Config struct {
-	InboundDNSQueue uint16
-	SelfDNSQueue    uint16
-	ResolverIP      string
-	ResolveWithDoH  bool
-	DoHURL          string
-	DoHServerName   string
-	Filters         []FilterOptions
+	DNSResponseQueue uint16
+	SelfDNSQueue     uint16
+	ResolverIP       string
+	ResolveWithDoH   bool
+	DoHURL           string
+	DoHServerName    string
+	Filters          []FilterOptions
 
 	enforcerCreator enforcerCreator
 	sender          resolve.DNSSender
@@ -90,8 +90,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	if len(config.Filters) == 0 {
 		return nil, errors.New("at least one filter must be specified")
 	}
-	if config.InboundDNSQueue == 0 {
-		return nil, errors.New(`"inboundDNSQueue" must be set`)
+	if config.DNSResponseQueue == 0 {
+		return nil, errors.New(`"dnsResponseQueue" must be set`)
 	}
 
 	if !config.ResolveWithDoH {
@@ -151,15 +151,15 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		if filterOpt.DNSQueue != 0 && len(filterOpt.AllowedDomains) == 0 && len(filterOpt.CachedDomains) > 0 {
 			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedDomains" is not empty`, filterOpt.Name)
 		}
-		if config.InboundDNSQueue == filterOpt.DNSQueue {
-			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "dnsQueue" must be different`, filterOpt.Name)
+		if config.DNSResponseQueue == filterOpt.DNSQueue {
+			return nil, fmt.Errorf(`filter %q: "dnsResponseQueue" and "dnsQueue" must be different`, filterOpt.Name)
 		}
 
 		if filterOpt.TrafficQueue == 0 {
 			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
 		}
-		if config.InboundDNSQueue == filterOpt.TrafficQueue {
-			return nil, fmt.Errorf(`filter %q: "inboundDNSQueue" and "trafficQueue" must be different`, filterOpt.Name)
+		if config.DNSResponseQueue == filterOpt.TrafficQueue {
+			return nil, fmt.Errorf(`filter %q: "dnsResponseQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
 		if filterOpt.DNSQueue != 0 && filterOpt.TrafficQueue != 0 && filterOpt.DNSQueue == filterOpt.TrafficQueue {
@@ -341,8 +341,8 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter has a non-empty "cachedDomains"`)
 	}
 
-	if config.InboundDNSQueue == config.SelfDNSQueue {
-		return nil, errors.New(`"inboundDNSQueue" and "selfDNSQueue" must be different`)
+	if config.DNSResponseQueue == config.SelfDNSQueue {
+		return nil, errors.New(`"dnsResponseQueue" and "selfDNSQueue" must be different`)
 	}
 	for _, filter := range config.Filters {
 		if config.SelfDNSQueue != 0 && filter.DNSQueue != 0 && config.SelfDNSQueue == filter.DNSQueue {

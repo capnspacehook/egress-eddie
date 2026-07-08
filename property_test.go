@@ -42,7 +42,7 @@ const (
 	qTraffic = 200
 
 	propConfig = `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "prop"

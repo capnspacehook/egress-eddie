@@ -56,7 +56,7 @@ func FuzzVerdicts(f *testing.F) {
 
 	logger := createLogger(f)
 	cb := []byte(`
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "fuzz"
@@ -88,14 +88,14 @@ allowedDomains = [
 	filters.Start()
 
 	dnsQueues := []uint16{
-		config.InboundDNSQueue,
 		config.Filters[0].DNSQueue,
+		config.DNSResponseQueue,
 	}
 
 	packetID := uint32(1)
 	f.Fuzz(func(t *testing.T, packet []byte, connState uint8, ipv6 bool) {
 		allowedIPsLen := filters.filters[0].allowedIPs.Len()
-		additionalDomainsLen := filters.filters[0].additionalDomains.Len()
+		allowedTargetsLen := filters.filters[0].allowedTargets.Len()
 
 		hwProto := uint16(unix.ETH_P_IP)
 		if ipv6 {
@@ -110,12 +110,12 @@ allowedDomains = [
 				Payload:    new(packet),
 			})
 
-			// DNS request filters should never add IPs or domains
-			if i < 2 {
+			// DNS request filter should never add IPs or domains
+			if i == 0 {
 				if filters.filters[0].allowedIPs.Len() > allowedIPsLen {
 					t.Errorf("queue %d added an IP", queue)
 				}
-				if filters.filters[0].additionalDomains.Len() > additionalDomainsLen {
+				if filters.filters[0].allowedTargets.Len() > allowedTargetsLen {
 					t.Errorf("queue %d added a domain", queue)
 				}
 			}

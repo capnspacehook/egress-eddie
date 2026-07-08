@@ -136,7 +136,7 @@ numbers to open and use. Here's a simple config that only allows traffic to `git
 using the same nfqueue numbers that were set in iptables rules above:
 
 ```toml
-inboundDNSQueue.ipv4 = 1
+dnsResponseQueue.ipv4 = 1
 
 [[filters]]
 name = "example"
@@ -148,7 +148,7 @@ allowedDomains = [
 ]
 ```
 
-If you are filtering `IPv6` traffic and using ip6tables, set `inboundDNSQueue.ipv6`,
+If you are filtering `IPv6` traffic and using ip6tables, set `dnsResponseQueue.ipv6`,
 `dnsQueue.ipv6`, and `trafficQueue.ipv6`.
 
 Next we create a filter, setting the nfqueue numbers used for DNS requests and traffic
@@ -203,7 +203,7 @@ iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queu
 config file:
 
 ```toml
-inboundDNSQueue.ipv4 = 1
+dnsResponseQueue.ipv4 = 1
 
 # filter apt updating
 [[filters]]

@@ -86,9 +86,9 @@ type filter struct {
 	sender   resolve.DNSSender
 	injector *resolve.DNSInjector
 
-	connections       *timedcache.TimedCache[connectionID, requestInfo]
-	allowedIPs        *timedcache.TimedCache[netip.Addr, struct{}]
-	additionalDomains *timedcache.TimedCache[string, struct{}]
+	connections    *timedcache.TimedCache[connectionID, requestInfo]
+	allowedIPs     *timedcache.TimedCache[netip.Addr, struct{}]
+	allowedTargets *timedcache.TimedCache[string, struct{}]
 
 	isSelfFilter bool
 }
@@ -177,7 +177,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		permissiveMode: permissiveMode,
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
-		queueNum:       config.InboundDNSQueue,
+		queueNum:       config.DNSResponseQueue,
 		filters:        make([]*filter, len(config.Filters)),
 	}
 
@@ -208,7 +208,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		}
 	}
 
-	nf, err := newEnforcer(ctx, logger, config.InboundDNSQueue, newDNSResponseCallback(&f))
+	nf, err := newEnforcer(ctx, logger, config.DNSResponseQueue, newDNSResponseCallback(&f))
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +303,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 
 	if opts.TrafficQueue != 0 {
 		f.allowedIPs = timedcache.New[netip.Addr, struct{}](f.logger, false)
-		f.additionalDomains = timedcache.New[string, struct{}](filterLogger, false)
+		f.allowedTargets = timedcache.New[string, struct{}](filterLogger, false)
 
 		nf, err := newEnforcer(ctx, filterLogger, opts.TrafficQueue, newGenericCallback(&f))
 		if err != nil {
@@ -445,8 +445,8 @@ func (f *filter) close() {
 	if f.allowedIPs != nil {
 		f.allowedIPs.Stop()
 	}
-	if f.additionalDomains != nil {
-		f.additionalDomains.Stop()
+	if f.allowedTargets != nil {
+		f.allowedTargets.Stop()
 	}
 }
 
@@ -987,13 +987,12 @@ func (f *filter) domainNameAllowed(domain string, isTarget bool) (bool, error) {
 		}
 	}
 
-	// the self-filter doesn't have a nfqueue for generic traffic, and
-	// therefore won't have a cache for additional domains
+	// the self-filter doesn't allow any IPs or additionalDomains
 	if f.isSelfFilter {
 		return false, nil
 	}
 
-	return f.additionalDomains.Exists(lowerDomain), nil
+	return f.allowedTargets.Exists(lowerDomain), nil
 }
 
 // handleAnswers allows IPs and domains in answers of a DNS response;
@@ -1031,13 +1030,19 @@ func (f *filter) handleAnswers(dnsMsg *dns.Msg) {
 		}
 		// temporarily allow resolution of the target domain, but skip root domains
 		if target != "" && target != "." {
-			f.additionalDomains.Add(prepareDomainName(target), ttl)
+			f.allowedTargets.Add(prepareDomainName(target), ttl)
 		}
 	}
 }
 
 func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback, permissiveMode bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("recovered from panic", zap.Any("panic", r))
+			}
+		}()
+
 		v := callback(attr)
 		setVerdict(logger, e, attr, v, permissiveMode)
 		return 0

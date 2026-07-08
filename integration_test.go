@@ -46,7 +46,7 @@ func TestIntegrationFiltering(t *testing.T) {
 	requireRoot(t)
 
 	configStr := `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 
 [[filters]]
 name = "test"
@@ -186,7 +186,7 @@ allowAllDomains = true`
 		{
 			name: "udp",
 			globalConfig: `
-inboundDNSQueue = 1`,
+dnsResponseQueue = 1`,
 			iptablesRules: []string{
 				"-A INPUT -p udp --sport 53 -m state --state ESTABLISHED -j NFQUEUE --queue-num 1",
 				"-A OUTPUT -p udp --dport 53 -m state --state NEW,ESTABLISHED -j NFQUEUE --queue-num 100",
@@ -195,7 +195,7 @@ inboundDNSQueue = 1`,
 		}, {
 			name: "doh",
 			globalConfig: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 resolveWithDoH = true
 dohURL = "https://1.1.1.1"
 dohServerName = "one.one.one.one"`,
@@ -238,7 +238,7 @@ func TestIntegrationCaching(t *testing.T) {
 		{
 			name: "udp",
 			configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 resolverIP = "1.1.1.1"
 
@@ -261,7 +261,7 @@ cachedTargets = [
 		}, {
 			name: "doh",
 			configStr: `
-inboundDNSQueue = 1
+dnsResponseQueue = 1
 selfDNSQueue = 100
 resolveWithDoH = true
 dohURL = "https://1.1.1.1"
@@ -329,7 +329,7 @@ func TestIntegrationFiltersStart(t *testing.T) {
 	requireRoot(t)
 
 	configBytes := []byte(`
-inboundDNSQueue = 10
+dnsResponseQueue = 10
 selfDNSQueue = 110
 
 [[filters]]
@@ -368,7 +368,7 @@ allowedDomains = [
 		finishedAt := make(chan time.Time)
 
 		go func() {
-			mockEnforcers[config.InboundDNSQueue].hook(nfqueue.Attribute{})
+			mockEnforcers[config.DNSResponseQueue].hook(nfqueue.Attribute{})
 			t.Log("finished DNS reply queue")
 			finishedAt <- time.Now()
 		}()
