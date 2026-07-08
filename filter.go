@@ -847,21 +847,29 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		var target string
 		switch answer := a.(type) {
 		case *dns.A:
+			emptyTarget = true
 			if !answer.Addr.Is4() {
 				return fmt.Errorf("IP address %s in A answer is not an IPv4 address", answer.Addr)
 			}
+			if f.isSelfFilter {
+				break
+			}
+
 			if err := f.addrChecker.SafeAddr(answer.Addr); err != nil {
 				return fmt.Errorf("IP address in A answer: %w", err)
 			}
-			emptyTarget = true
 		case *dns.AAAA:
+			emptyTarget = true
 			if !answer.Addr.Is6() {
 				return fmt.Errorf("IP address %s in AAAA answer is not an IPv6 address", answer.Addr)
 			}
+			if f.isSelfFilter {
+				break
+			}
+
 			if err := f.addrChecker.SafeAddr(answer.Addr); err != nil {
 				return fmt.Errorf("IP address in AAAA answer: %w", err)
 			}
-			emptyTarget = true
 		case *dns.CNAME:
 			target = answer.Target
 		case *dns.SRV:

@@ -12,7 +12,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"code.dny.dev/ssrf"
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsutil"
 	"codeberg.org/miekg/dns/rdata"
@@ -117,7 +116,10 @@ func testFilterState(t *rapid.T) {
 		config.sender = &mockSender{}
 
 		// Allow all IPs in answers by allowing the default deny CIDRs
-		config.Filters[0].AllowedAnswerCIDRs = append(ssrf.IPv4DeniedPrefixes, ssrf.IPv6DeniedPrefixes...)
+		config.Filters[0].AllowedAnswerCIDRs = []netip.Prefix{
+			netip.MustParsePrefix("0.0.0.0/0"),
+			netip.MustParsePrefix("::/0"),
+		}
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
