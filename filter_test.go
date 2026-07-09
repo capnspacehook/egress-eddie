@@ -16,6 +16,8 @@ import (
 )
 
 func TestDomainAllowed(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, testDomainAllowed)
 }
 
@@ -116,6 +118,8 @@ func FuzzConnectionID(f *testing.F) {
 }
 
 func TestConnectionID(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, testConnectionID)
 }
 
@@ -213,6 +217,8 @@ func testConnectionID(t *rapid.T) {
 }
 
 func TestStripPrefixLabels(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, func(t *rapid.T) {
 		pd := GenPrefixedDomainName().Draw(t, "prefixedDomain")
 

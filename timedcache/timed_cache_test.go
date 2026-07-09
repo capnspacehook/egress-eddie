@@ -16,6 +16,8 @@ import (
 // TestTimedCacheDeadlock tests that a deadlock does not occur when
 // an entry is added and removed at the same time.
 func TestTimedCacheDeadlock(t *testing.T) {
+	t.Parallel()
+
 	is := is.New(t)
 
 	logger, err := zap.NewDevelopment()
@@ -28,7 +30,10 @@ func TestTimedCacheDeadlock(t *testing.T) {
 	tc.Add(42, time.Second)
 }
 
+//nolint:tparallel
 func TestTimedCache(t *testing.T) {
+	t.Parallel()
+
 	is := is.New(t)
 
 	logger, err := zap.NewDevelopment()
@@ -65,7 +70,10 @@ func TestTimedCache(t *testing.T) {
 	})
 }
 
+//nolint:tparallel
 func TestTimedCacheWithCount(t *testing.T) {
+	t.Parallel()
+
 	is := is.New(t)
 
 	logger, err := zap.NewDevelopment()
@@ -117,6 +125,8 @@ func TestTimedCacheWithCount(t *testing.T) {
 }
 
 func TestTimedCacheState(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, testTimedCacheState)
 }
 

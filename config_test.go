@@ -804,9 +804,13 @@ allowAllDomains = true`,
 }
 
 func TestParseConfig(t *testing.T) {
+	t.Parallel()
+
 	is := is.New(t)
 	for _, tt := range configTests {
 		t.Run(tt.testName, func(t *testing.T) {
+			t.Parallel()
+
 			is := is.New(t)
 
 			config, err := parseConfigBytes([]byte(tt.configStr))
@@ -934,6 +938,8 @@ func generateConfig() *rapid.Generator[Config] {
 
 // Asserts that checking any config won't panic
 func TestConfigProperties(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, func(t *rapid.T) {
 		config := generateConfig().Draw(t, "config")
 		_ = checkConfig(&config)
@@ -941,7 +947,7 @@ func TestConfigProperties(t *testing.T) {
 }
 
 func TestValidDomainName(t *testing.T) {
-	is := is.New(t)
+	t.Parallel()
 
 	tests := []struct {
 		name       string
@@ -1008,6 +1014,8 @@ func TestValidDomainName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			is := is.New(t)
 
 			err := validDomainName(tt.domainName)

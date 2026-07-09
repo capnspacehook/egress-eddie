@@ -94,6 +94,8 @@ func init() {
 }
 
 func TestFilterProperties(t *testing.T) {
+	t.Parallel()
+
 	rapid.Check(t, testFilterState)
 }
 

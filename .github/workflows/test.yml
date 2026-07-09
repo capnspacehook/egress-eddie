@@ -34,9 +34,9 @@ jobs:
       # open nfqueues, which is a privileged operation
       - run: |
           go test -c -race -o egress-eddie.test
-          sudo ./egress-eddie.test -enable-ipv6=false -test.timeout 5m -test.v -test.run TestIntegration
+          sudo ./egress-eddie.test -enable-ipv6=false -test.timeout 5m -test.v -test.shuffle on -test.run TestIntegration
 
-          go test -race -timeout 10m -v -rapid.checks 100_000 ./...
+          go test -race -timeout 10m -v -shuffle on -rapid.checks 100_000 ./...
 
       - name: Save Go cache
         if: always()
