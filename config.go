@@ -87,46 +87,54 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		return nil, errors.New(sb.String())
 	}
 
+	if err := checkConfig(&config); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
+func checkConfig(config *Config) error {
 	// check global options
 	if len(config.Filters) == 0 {
-		return nil, errors.New("at least one filter must be specified")
+		return errors.New("at least one filter must be specified")
 	}
 	if config.DNSResponseQueue == 0 {
-		return nil, errors.New(`"dnsResponseQueue" must be set`)
+		return errors.New(`"dnsResponseQueue" must be set`)
 	}
 
 	if !config.ResolveWithDoH {
 		if config.ResolverIP != "" {
 			if _, err := netip.ParseAddr(config.ResolverIP); err != nil {
-				return nil, fmt.Errorf(`parsing "resolverIP" %q: %w`, config.ResolverIP, err)
+				return fmt.Errorf(`parsing "resolverIP" %q: %w`, config.ResolverIP, err)
 			}
 		}
 
 		if config.DoHURL != "" {
-			return nil, errors.New(`"resolveWithDoH" must be set when "dohURL" is set`)
+			return errors.New(`"resolveWithDoH" must be set when "dohURL" is set`)
 		} else if config.DoHServerName != "" {
-			return nil, errors.New(`"resolveWithDoH" must be set when "dohServerName" is set`)
+			return errors.New(`"resolveWithDoH" must be set when "dohServerName" is set`)
 		}
 	} else {
 		if config.ResolverIP != "" {
-			return nil, errors.New(`"resolverIP" must not be set when "resolveWithDoH" is set`)
+			return errors.New(`"resolverIP" must not be set when "resolveWithDoH" is set`)
 		}
 
 		if config.DoHURL == "" {
-			return nil, errors.New(`"dohURL" must be set when "resolveWithDoH" is set`)
+			return errors.New(`"dohURL" must be set when "resolveWithDoH" is set`)
 		}
 		dohURL, err := url.Parse(config.DoHURL)
 		if err != nil {
-			return nil, fmt.Errorf("parsing DoH URL %q: %w", config.DoHURL, err)
+			return fmt.Errorf("parsing DoH URL %q: %w", config.DoHURL, err)
 		}
 		if dohURL.Scheme != "https" {
-			return nil, fmt.Errorf(`DoH URL %q must use scheme "https"`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q must use scheme "https"`, config.DoHURL)
 		}
 		if dohURL.Host == "" {
-			return nil, fmt.Errorf(`DoH URL %q must have a host`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q must have a host`, config.DoHURL)
 		}
 		if dohURL.Path != "" {
-			return nil, fmt.Errorf(`DoH URL %q must not have a path`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q must not have a path`, config.DoHURL)
 		}
 	}
 
@@ -140,89 +148,89 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	// check individual filter options
 	for i, filterOpt := range config.Filters {
 		if filterOpt.Name == "" {
-			return nil, fmt.Errorf(`filter #%d: "name" must be set`, i)
+			return fmt.Errorf(`filter #%d: "name" must be set`, i)
 		}
 		if filterOpt.Name == selfFilterName {
-			return nil, fmt.Errorf("filter #%d: filter name %q is reserved and must not be used", i, selfFilterName)
+			return fmt.Errorf("filter #%d: filter name %q is reserved and must not be used", i, selfFilterName)
 		}
 
 		if filterOpt.DNSQueue == 0 && len(filterOpt.CachedDomains) == 0 {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" must be set`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "dnsQueue" must be set`, filterOpt.Name)
 		}
 		if filterOpt.DNSQueue != 0 && len(filterOpt.AllowedDomains) == 0 && len(filterOpt.CachedDomains) > 0 {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedDomains" is not empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "dnsQueue" must not be set when "allowedDomains" is empty and "cachedDomains" is not empty`, filterOpt.Name)
 		}
 		if config.DNSResponseQueue == filterOpt.DNSQueue {
-			return nil, fmt.Errorf(`filter %q: "dnsResponseQueue" and "dnsQueue" must be different`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "dnsResponseQueue" and "dnsQueue" must be different`, filterOpt.Name)
 		}
 
 		if filterOpt.TrafficQueue == 0 {
-			return nil, fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "trafficQueue" must be set`, filterOpt.Name)
 		}
 		if config.DNSResponseQueue == filterOpt.TrafficQueue {
-			return nil, fmt.Errorf(`filter %q: "dnsResponseQueue" and "trafficQueue" must be different`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "dnsResponseQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
 		if filterOpt.DNSQueue != 0 && filterOpt.TrafficQueue != 0 && filterOpt.DNSQueue == filterOpt.TrafficQueue {
-			return nil, fmt.Errorf(`filter %q: "dnsQueue" and "trafficQueue" must be different`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "dnsQueue" and "trafficQueue" must be different`, filterOpt.Name)
 		}
 
 		if len(filterOpt.AllowedDomains) == 0 && !filterOpt.AllowAllDomains && len(filterOpt.CachedDomains) == 0 {
-			return nil, fmt.Errorf(`filter %q: "allowedDomains" must not be empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "allowedDomains" must not be empty`, filterOpt.Name)
 		}
 		if len(filterOpt.AllowedDomains) > 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "allowedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "allowedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if filterOpt.AllowAnswersFor == 0 && len(filterOpt.AllowedDomains) > 0 {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowedDomains" is not empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowedDomains" is not empty`, filterOpt.Name)
 		}
 		if filterOpt.AllowAnswersFor == 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowAllDomains" is true`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "allowAnswersFor" must be set when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if filterOpt.AllowAnswersFor < 0 {
-			return nil, fmt.Errorf(`filter %q: "allowAnswersFor" must not be negative`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "allowAnswersFor" must not be negative`, filterOpt.Name)
 		}
 
 		// TODO: this might be a valid config
 		if len(filterOpt.CachedDomains) > 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "cachedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "cachedDomains" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
 		if len(filterOpt.CachedTargets) > 0 && filterOpt.AllowAllDomains {
-			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "allowAllDomains" is true`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "cachedTargets" must be empty when "allowAllDomains" is true`, filterOpt.Name)
 		}
 
 		if len(filterOpt.CachedTargets) > 0 && len(filterOpt.CachedDomains) == 0 {
-			return nil, fmt.Errorf(`filter %q: "cachedTargets" must be empty when "cachedDomains" is empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "cachedTargets" must be empty when "cachedDomains" is empty`, filterOpt.Name)
 		}
 		if filterOpt.ReCacheEvery == 0 && len(filterOpt.CachedDomains) > 0 {
-			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedDomains" is not empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "reCacheEvery" must be set when "cachedDomains" is not empty`, filterOpt.Name)
 		}
 		if filterOpt.ReCacheEvery != 0 && len(filterOpt.CachedDomains) == 0 {
-			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedDomains" is empty`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "reCacheEvery" must not be set when "cachedDomains" is empty`, filterOpt.Name)
 		}
 		if filterOpt.ReCacheEvery < 0 {
-			return nil, fmt.Errorf(`filter %q: "reCacheEvery" must not be negative`, filterOpt.Name)
+			return fmt.Errorf(`filter %q: "reCacheEvery" must not be negative`, filterOpt.Name)
 		}
 
 		for j, name := range filterOpt.AllowedDomains {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if !isPattern {
 				if err := validLowerDomainName(name); err != nil {
-					return nil, fmt.Errorf("filter %q: allowed domain name %q is invalid: domain name %w", filterOpt.Name, name, err)
+					return fmt.Errorf("filter %q: allowed domain name %q is invalid: domain name %w", filterOpt.Name, name, err)
 				}
 			}
 
 			g, err := createDomainMatcher(name)
 			if err != nil {
-				return nil, fmt.Errorf("filter %q: compiling allowed domain name pattern %q: %w", filterOpt.Name, name, err)
+				return fmt.Errorf("filter %q: compiling allowed domain name pattern %q: %w", filterOpt.Name, name, err)
 			}
 			config.Filters[i].allowedDomainMatchers = append(config.Filters[i].allowedDomainMatchers, g)
 
 			if slices.Contains(filterOpt.CachedDomains, name) {
-				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed domain name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
 			if containsAfter(filterOpt.AllowedDomains, name, j) {
-				return nil, fmt.Errorf("filter %q: allowed domain name %q is specified more than once", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed domain name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
@@ -230,41 +238,41 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if !isPattern {
 				if err := validLowerDomainName(name); err != nil {
-					return nil, fmt.Errorf("filter %q: allowed target name %q is invalid: domain name %w", filterOpt.Name, name, err)
+					return fmt.Errorf("filter %q: allowed target name %q is invalid: domain name %w", filterOpt.Name, name, err)
 				}
 			}
 
 			g, err := createDomainMatcher(name)
 			if err != nil {
-				return nil, fmt.Errorf("filter %q: compiling allowed target name pattern %q: %w", filterOpt.Name, name, err)
+				return fmt.Errorf("filter %q: compiling allowed target name pattern %q: %w", filterOpt.Name, name, err)
 			}
 			config.Filters[i].allowedTargetMatchers = append(config.Filters[i].allowedTargetMatchers, g)
 
 			if slices.Contains(filterOpt.AllowedDomains, name) {
-				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as an allowed domain name as well", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed target name %q is specified as an allowed domain name as well", filterOpt.Name, name)
 			}
 			if slices.Contains(filterOpt.CachedDomains, name) {
-				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed target name %q is specified as a domain name to be cached as well", filterOpt.Name, name)
 			}
 			if slices.Contains(filterOpt.CachedTargets, name) {
-				return nil, fmt.Errorf("filter %q: allowed target name %q is specified as a target name to be cached as well", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed target name %q is specified as a target name to be cached as well", filterOpt.Name, name)
 			}
 			if containsAfter(filterOpt.AllowedTargets, name, j) {
-				return nil, fmt.Errorf("filter %q: allowed target name %q is specified more than once", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: allowed target name %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
 		for j, name := range filterOpt.CachedDomains {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if isPattern {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern, domain names to be cached must be exact domain names only", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: domain name to be cached %q is a glob pattern, domain names to be cached must be exact domain names only", filterOpt.Name, name)
 			}
 
 			if err := validLowerDomainName(name); err != nil {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
+				return fmt.Errorf("filter %q: domain name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
 			}
 			if containsAfter(filterOpt.CachedDomains, name, j) {
-				return nil, fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: domain name to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
@@ -272,50 +280,50 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			isPattern := strings.ContainsAny(name, globTokens)
 			if !isPattern {
 				if err := validLowerDomainName(name); err != nil {
-					return nil, fmt.Errorf("filter %q: target name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
+					return fmt.Errorf("filter %q: target name to be cached %q is invalid: domain name %w", filterOpt.Name, name, err)
 				}
 			}
 
 			if _, err := createDomainMatcher(name); err != nil {
-				return nil, fmt.Errorf("filter %q: compiling target name to be cached pattern %q: %w", filterOpt.Name, name, err)
+				return fmt.Errorf("filter %q: compiling target name to be cached pattern %q: %w", filterOpt.Name, name, err)
 			}
 
 			if containsAfter(filterOpt.CachedTargets, name, j) {
-				return nil, fmt.Errorf("filter %q: target name to be cached %q is specified more than once", filterOpt.Name, name)
+				return fmt.Errorf("filter %q: target name to be cached %q is specified more than once", filterOpt.Name, name)
 			}
 		}
 
 		for j, cidr := range filterOpt.AllowedAnswerCIDRs {
 			if containsAfter(filterOpt.AllowedAnswerCIDRs, cidr, j) {
-				return nil, fmt.Errorf("filter %q: allowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
+				return fmt.Errorf("filter %q: allowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
 			}
 		}
 		for j, cidr := range filterOpt.DisallowedAnswerCIDRs {
 			for _, allowedCIDR := range filterOpt.AllowedAnswerCIDRs {
 				if allowedCIDR == cidr {
-					return nil, fmt.Errorf("filter %q: allowed and disallowed answer CIDRs %s are the same", filterOpt.Name, cidr)
+					return fmt.Errorf("filter %q: allowed and disallowed answer CIDRs %s are the same", filterOpt.Name, cidr)
 				}
 				if allowedCIDR.Contains(cidr.Addr()) {
-					return nil, fmt.Errorf("filter %q: disallowed answer CIDR %s overlaps with allowed answer CIDR %s", filterOpt.Name, cidr, allowedCIDR)
+					return fmt.Errorf("filter %q: disallowed answer CIDR %s overlaps with allowed answer CIDR %s", filterOpt.Name, cidr, allowedCIDR)
 				}
 			}
 
-			if containsAfter(filterOpt.AllowedAnswerCIDRs, cidr, j) {
-				return nil, fmt.Errorf("filter %q: disallowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
+			if containsAfter(filterOpt.DisallowedAnswerCIDRs, cidr, j) {
+				return fmt.Errorf("filter %q: disallowed answer CIDR %s is specified more than once", filterOpt.Name, cidr)
 			}
 		}
 
 		if idx, ok := filterNames[filterOpt.Name]; ok {
-			return nil, fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
+			return fmt.Errorf(`filter #%d: filter name %q is already used by filter #%d`, i, filterOpt.Name, idx)
 		}
 		if filterOpt.DNSQueue != 0 {
 			if name, ok := filterQueues[filterOpt.DNSQueue]; ok {
-				return nil, fmt.Errorf(`filter %q: "dnsQueue" %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue, name)
+				return fmt.Errorf(`filter %q: "dnsQueue" %d is already used by filter %q`, filterOpt.Name, filterOpt.DNSQueue, name)
 			}
 		}
 		if filterOpt.TrafficQueue != 0 {
 			if name, ok := filterQueues[filterOpt.TrafficQueue]; ok {
-				return nil, fmt.Errorf(`filter %q: "trafficQueue" %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue, name)
+				return fmt.Errorf(`filter %q: "trafficQueue" %d is already used by filter %q`, filterOpt.Name, filterOpt.TrafficQueue, name)
 			}
 		}
 
@@ -336,21 +344,21 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 	}
 
 	if config.SelfDNSQueue == 0 && len(allCachedDomains) > 0 {
-		return nil, errors.New(`"selfDNSQueue" must be set when at least one filter has a non-empty "cachedDomains"`)
+		return errors.New(`"selfDNSQueue" must be set when at least one filter has a non-empty "cachedDomains"`)
 	}
 	if config.SelfDNSQueue != 0 && len(allCachedDomains) == 0 {
-		return nil, errors.New(`"selfDNSQueue" must only be set when at least one filter has a non-empty "cachedDomains"`)
+		return errors.New(`"selfDNSQueue" must only be set when at least one filter has a non-empty "cachedDomains"`)
 	}
 
 	if config.DNSResponseQueue == config.SelfDNSQueue {
-		return nil, errors.New(`"dnsResponseQueue" and "selfDNSQueue" must be different`)
+		return errors.New(`"dnsResponseQueue" and "selfDNSQueue" must be different`)
 	}
 	for _, filter := range config.Filters {
 		if config.SelfDNSQueue != 0 && filter.DNSQueue != 0 && config.SelfDNSQueue == filter.DNSQueue {
-			return nil, fmt.Errorf(`filter %q: "selfDNSQueue" and "dnsQueue" must be different`, filter.Name)
+			return fmt.Errorf(`filter %q: "selfDNSQueue" and "dnsQueue" must be different`, filter.Name)
 		}
 		if config.SelfDNSQueue != 0 && filter.TrafficQueue != 0 && config.SelfDNSQueue == filter.TrafficQueue {
-			return nil, fmt.Errorf(`filter %q: "selfDNSQueue" and "trafficQueue" must be different`, filter.Name)
+			return fmt.Errorf(`filter %q: "selfDNSQueue" and "trafficQueue" must be different`, filter.Name)
 		}
 	}
 
@@ -371,7 +379,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			for i, name := range allCachedDomains {
 				m, err := createDomainMatcher(name)
 				if err != nil {
-					return nil, fmt.Errorf("compiling domain name to be cached pattern %q: %w", name, err)
+					return fmt.Errorf("compiling domain name to be cached pattern %q: %w", name, err)
 				}
 
 				selfFilter.allowedDomainMatchers[i] = m
@@ -387,7 +395,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 			for i, name := range allCachedTargets {
 				m, err := createDomainMatcher(name)
 				if err != nil {
-					return nil, fmt.Errorf("compiling target name to be cached pattern %q: %w", name, err)
+					return fmt.Errorf("compiling target name to be cached pattern %q: %w", name, err)
 				}
 
 				selfFilter.allowedTargetMatchers[i] = m
@@ -397,7 +405,7 @@ func parseConfigBytes(cb []byte) (*Config, error) {
 		config.Filters = append([]FilterOptions{selfFilter}, config.Filters...)
 	}
 
-	return &config, nil
+	return nil
 }
 
 func createDomainMatcher(name string) (glob.Glob, error) {

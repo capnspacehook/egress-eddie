@@ -1,10 +1,12 @@
 package egresseddie
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/matryer/is"
+	"pgregory.net/rapid"
 )
 
 var configTests = []struct {
@@ -825,6 +827,117 @@ func TestParseConfig(t *testing.T) {
 			is.Equal(tt.expectedConfig, config)
 		})
 	}
+}
+
+func generateConfig() *rapid.Generator[Config] {
+	return rapid.Custom(func(t *rapid.T) Config {
+		config := Config{
+			DNSResponseQueue: rapid.Uint16Range(0, 100).Draw(t, "dnsResponseQueue"),
+			ResolveWithDoH:   rapid.Bool().Draw(t, "resolveWithDoH"),
+		}
+		if rapid.Bool().Draw(t, "setSelfDNSQueue") {
+			config.SelfDNSQueue = rapid.Uint16Range(1, 100).Draw(t, "selfDNSQueue")
+		}
+		if rapid.Bool().Draw(t, "setResolverIP") {
+			if rapid.Bool().Draw(t, "validResolverIP") {
+				if rapid.Bool().Draw(t, "ipv6") {
+					config.ResolverIP = GenIPv6Addr().Draw(t, "resolverIP").String()
+				} else {
+					config.ResolverIP = GenIPv4Addr().Draw(t, "resolverIP").String()
+				}
+			} else {
+				config.ResolverIP = rapid.String().Draw(t, "resolverIP")
+			}
+		}
+		if rapid.Bool().Draw(t, "setDoHURL") {
+			if rapid.Bool().Draw(t, "validDoHURL") {
+				config.DoHURL = "https://" + GenDomainName().Draw(t, "dohHost")
+				if rapid.Bool().Draw(t, "withPath") {
+					config.DoHURL += "/" + rapid.String().Draw(t, "path")
+				}
+			} else {
+				config.DoHURL = rapid.String().Draw(t, "dohURL")
+			}
+		}
+		if rapid.Bool().Draw(t, "setDoHServerName") {
+			config.DoHServerName = GenDomainName().Draw(t, "dohServerName")
+		}
+
+		numFilters := rapid.IntRange(0, 5).Draw(t, "numFilters")
+		config.Filters = make([]FilterOptions, numFilters)
+		for i := range numFilters {
+			f := FilterOptions{
+				Name:            rapid.String().Draw(t, "filterName"),
+				AllowAllDomains: rapid.Bool().Draw(t, "allowAllDomains"),
+				AllowAnswersFor: time.Second * time.Duration(rapid.IntRange(0, 100).Draw(t, "allowAnswersFor")),
+			}
+			if rapid.Bool().Draw(t, "setDNSQueue") {
+				f.DNSQueue = rapid.Uint16Range(1, 100).Draw(t, "dnsQueue")
+			}
+			if rapid.Bool().Draw(t, "setTrafficQueue") {
+				f.TrafficQueue = rapid.Uint16Range(1, 100).Draw(t, "trafficQueue")
+			}
+			if rapid.Bool().Draw(t, "setReCacheEvery") {
+				f.ReCacheEvery = time.Second * time.Duration(rapid.IntRange(1, 100).Draw(t, "reCacheEvery"))
+			}
+
+			numAllowedDomains := rapid.IntRange(0, 5).Draw(t, "numAllowedDomains")
+			f.AllowedDomains = make([]string, numAllowedDomains)
+			for j := range numAllowedDomains {
+				f.AllowedDomains[j] = GenDomainName().Draw(t, "allowedDomain")
+			}
+			numAllowedTargets := rapid.IntRange(0, 5).Draw(t, "numAllowedTargets")
+			f.AllowedTargets = make([]string, numAllowedTargets)
+			for j := range numAllowedTargets {
+				f.AllowedTargets[j] = GenDomainName().Draw(t, "allowedTarget")
+			}
+			if rapid.Bool().Draw(t, "setCachedDomains") {
+				numCachedDomains := rapid.IntRange(0, 5).Draw(t, "numCachedDomains")
+				f.CachedDomains = make([]string, numCachedDomains)
+				for j := range numCachedDomains {
+					f.CachedDomains[j] = GenDomainName().Draw(t, "cachedDomain")
+				}
+			}
+			if rapid.Bool().Draw(t, "setCachedTargets") {
+				numCachedTargets := rapid.IntRange(0, 5).Draw(t, "numCachedTargets")
+				f.CachedTargets = make([]string, numCachedTargets)
+				for j := range numCachedTargets {
+					f.CachedTargets[j] = GenDomainName().Draw(t, "cachedTarget")
+				}
+			}
+
+			numAllowedCIDRs := rapid.IntRange(0, 5).Draw(t, "numAllowedCIDRs")
+			f.AllowedAnswerCIDRs = make([]netip.Prefix, numAllowedCIDRs)
+			for j := range numAllowedCIDRs {
+				if rapid.Bool().Draw(t, "ipv6") {
+					f.AllowedAnswerCIDRs[j] = GenIPv6Prefix().Draw(t, "allowedCIDR")
+				} else {
+					f.AllowedAnswerCIDRs[j] = GenIPv4Prefix().Draw(t, "allowedCIDR")
+				}
+			}
+			numDisallowedCIDRs := rapid.IntRange(0, 5).Draw(t, "numDisallowedCIDRs")
+			f.DisallowedAnswerCIDRs = make([]netip.Prefix, numDisallowedCIDRs)
+			for j := range numDisallowedCIDRs {
+				if rapid.Bool().Draw(t, "ipv6") {
+					f.DisallowedAnswerCIDRs[j] = GenIPv6Prefix().Draw(t, "disallowedCIDR")
+				} else {
+					f.DisallowedAnswerCIDRs[j] = GenIPv4Prefix().Draw(t, "disallowedCIDR")
+				}
+			}
+
+			config.Filters[i] = f
+		}
+
+		return config
+	})
+}
+
+// Asserts that checking any config won't panic
+func TestConfigProperties(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		config := generateConfig().Draw(t, "config")
+		_ = checkConfig(&config)
+	})
 }
 
 func TestValidDomainName(t *testing.T) {
