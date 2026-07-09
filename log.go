@@ -1,6 +1,7 @@
 package egresseddie
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -89,6 +90,10 @@ type dnsQuestion struct {
 
 func (q dnsQuestion) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	h := q.RR.Header()
+	if h == nil {
+		return errors.New("header is nil")
+	}
+
 	enc.AddString("name", h.Name)
 	enc.AddString("class", strings.ToLower(qClassToString(h.Class)))
 	enc.AddString("type", strings.ToLower(rrTypeToString(dns.RRToType(q.RR))))
@@ -114,7 +119,11 @@ type dnsRecord struct {
 }
 
 func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddString("owner_name", r.RR.Header().Name)
+	h := r.RR.Header()
+	if h == nil {
+		return errors.New("header is nil")
+	}
+	enc.AddString("owner_name", h.Name)
 
 	switch rr := r.RR.(type) {
 	case *dns.A:
