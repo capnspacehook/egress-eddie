@@ -32,6 +32,8 @@ const (
 	stateEstablishedReply = stateEstablished + stateIsReply
 	stateRelatedReply     = stateRelated + stateIsReply
 	stateUntracked        = 7
+
+	componentKey = "component"
 )
 
 // this must be kept up to date with the type switches in
@@ -497,6 +499,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 		validateResp = f.validateDNSResponse
 	}
 
+	logger = logger.With(zap.String(componentKey, "cache"))
 	logger.Debug("starting cache loop", zap.String("transport", f.sender.TransportType()))
 
 	var wg sync.WaitGroup
@@ -519,6 +522,14 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 				} else if len(addrs) == 0 {
 					logger.Warn("no IPs found for domain", zap.String("domain", f.opts.CachedDomains[i]))
 					return
+				}
+
+				// check all IPs before allowing any
+				for _, addr := range addrs {
+					if err := f.addrChecker.SafeAddr(addr); err != nil {
+						logger.Warn("IP address in cached lookup is invalid", zap.Stringer("ip", addr), zap.Error(err))
+						return
+					}
 				}
 
 				for i := range addrs {
@@ -649,8 +660,11 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 	}
 
 	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
-		logger := f.logger.With(zap.String("filter.type", "dns-req"))
-		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		logger := f.logger.With(
+			zap.String(componentKey, "filter"),
+			zap.String("filter.type", "dns-req"),
+			zap.Uint16("queue.num", queueNum),
+		)
 		if f.permissiveMode {
 			logger = logger.With(zap.Bool("permissive", true))
 		}
@@ -689,21 +703,43 @@ func (f *filter) proxyDoH(ctx context.Context, reqMsg *dns.Msg, ri requestInfo) 
 }
 
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, error) {
+	payload, connID, err := parseLayer4Packet(packet, true, ipv6, inbound)
+	if err != nil {
+		return nil, connectionID{}, err
+	}
+
+	dnsMsg := dns.Msg{Data: payload}
+	if err := dnsMsg.Unpack(); err != nil {
+		return nil, connectionID{}, fmt.Errorf("decoding DNS message: %w", err)
+	}
+
+	return &dnsMsg, connID, nil
+}
+
+func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, connectionID, error) {
 	var (
 		ip4     layers.IPv4
 		ip6     layers.IPv6
+		tcp     layers.TCP
 		udp     layers.UDP
-		dnsMsg  dns.Msg
 		parser  *gopacket.DecodingLayerParser
 		decoded = make([]gopacket.LayerType, 0, 2)
 	)
 
-	// parse DNS packet
 	if !ipv6 {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp)
+		if expectUDP {
+			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp)
+		} else {
+			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &tcp, &udp)
+		}
 	} else {
-		parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp)
+		if expectUDP {
+			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp)
+		} else {
+			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &tcp, &udp)
+		}
 	}
+	// required because gopacket isn't parsing DNS packets
 	parser.IgnoreUnsupported = true
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
@@ -712,13 +748,10 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 	if len(decoded) != 2 {
 		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 2", len(decoded))
 	}
-	if decoded[1] != layers.LayerTypeUDP {
-		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", decoded[1])
-	}
 
-	dnsMsg.Data = udp.Payload
-	if err := dnsMsg.Unpack(); err != nil {
-		return nil, connectionID{}, fmt.Errorf("decoding DNS message: %w", err)
+	lType := decoded[1]
+	if (expectUDP && lType != layers.LayerTypeUDP) || (lType != layers.LayerTypeUDP && lType != layers.LayerTypeTCP) {
+		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", lType)
 	}
 
 	// build connection ID so dns requests/responses can be correlated
@@ -754,7 +787,14 @@ func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, 
 		connID.dst = netip.AddrPortFrom(dst, dstPort)
 	}
 
-	return &dnsMsg, connID, nil
+	var payload []byte
+	if lType == layers.LayerTypeUDP {
+		payload = udp.Payload
+	} else {
+		payload = tcp.Payload
+	}
+
+	return payload, connID, nil
 }
 
 func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (requestInfo, error) {
@@ -1175,8 +1215,11 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 	}
 
 	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
-		logger := f.logger.With(zap.String("filter.type", "dns-resp"))
-		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		logger := f.logger.With(
+			zap.String(componentKey, "filter"),
+			zap.String("filter.type", "dns-resp"),
+			zap.Uint16("queue.num", queueNum),
+		)
 		if f.permissiveMode {
 			logger = logger.With(zap.Bool("permissive", true))
 		}
@@ -1216,74 +1259,29 @@ func newGenericCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			var (
-				ip4     layers.IPv4
-				ip6     layers.IPv6
-				parser  *gopacket.DecodingLayerParser
-				decoded = make([]gopacket.LayerType, 1)
-			)
-
-			// parse packet
-			if *attr.HwProtocol == unix.ETH_P_IP {
-				parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
-				parser.IgnoreUnsupported = true
-				parser.SetDecodingLayerContainer(gopacket.DecodingLayerArray(nil))
-				parser.AddDecodingLayer(&ip4)
-			} else {
-				parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6)
-				parser.IgnoreUnsupported = true
-				parser.SetDecodingLayerContainer(gopacket.DecodingLayerArray(nil))
-				parser.AddDecodingLayer(&ip6)
-			}
-
-			if err := parser.DecodeLayers(*attr.Payload, &decoded); err != nil {
+			_, connID, err := parseLayer4Packet(*attr.Payload, false, *attr.HwProtocol == unix.ETH_P_IPV6, false)
+			if err != nil {
 				logger.Error("parsing packet", zap.Error(err))
-				return dropVerdict
-			}
-			if len(decoded) == 0 {
-				logger.Warn("dropping packet with no layers")
-				return dropVerdict
-			}
-
-			// get source and destination IP
-			var (
-				src, dst     netip.Addr
-				srcOK, dstOK bool
-			)
-			switch decoded[0] {
-			case layers.LayerTypeIPv4:
-				src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
-				dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
-				if !srcOK || !dstOK {
-					logger.Error("converting IPs", zap.Stringer("conn.src", ip4.SrcIP), zap.Stringer("conn.dst", ip4.DstIP))
-					return dropVerdict
-				}
-			case layers.LayerTypeIPv6:
-				src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
-				dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
-				if !srcOK || !dstOK {
-					logger.Error("converting IPs", zap.Stringer("conn.src", ip6.SrcIP), zap.Stringer("conn.dst", ip6.DstIP))
-					return dropVerdict
-				}
-			default:
-				logger.Error("unknown IP protocol", zap.Stringer("protocol", decoded[0]))
 				return dropVerdict
 			}
 
 			// validate that the destination IP is allowed
-			if f.allowedIPs.Exists(dst) {
-				logger.Info("allowing packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
+			if f.allowedIPs.Exists(connID.dst.Addr()) {
+				logger.Info("allowing packet", zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
 				return acceptVerdict
 			}
 
-			logger.Info("dropping packet", zap.Stringer("conn.src", src), zap.Stringer("conn.dst", dst))
+			logger.Info("dropping packet", zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
 			return dropVerdict
 		}
 	}
 
 	return func(queueNum uint16, e enforcer) nfqueue.HookFunc {
-		logger := f.logger.With(zap.String("filter.type", "traffic"))
-		logger = logger.With(zap.Uint16("queue.num", queueNum))
+		logger := f.logger.With(
+			zap.String(componentKey, "filter"),
+			zap.String("filter.type", "traffic"),
+			zap.Uint16("queue.num", queueNum),
+		)
 		if f.permissiveMode {
 			logger = logger.With(zap.Bool("permissive", true))
 		}
