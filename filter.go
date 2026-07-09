@@ -855,6 +855,8 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 			if !answer.Addr.Is4() {
 				return fmt.Errorf("IP address %s in A answer is not an IPv4 address", answer.Addr)
 			}
+			// the self-filter doesn't have addrChecker set, the parent
+			// filter will check the IPs in the answers if it's allowed
 			if f.isSelfFilter {
 				break
 			}
@@ -867,6 +869,8 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 			if !answer.Addr.Is6() {
 				return fmt.Errorf("IP address %s in AAAA answer is not an IPv6 address", answer.Addr)
 			}
+			// the self-filter doesn't have addrChecker set, the parent
+			// filter will check the IPs in the answers if it's allowed
 			if f.isSelfFilter {
 				break
 			}
@@ -1041,9 +1045,17 @@ func (f *filter) handleAnswers(dnsMsg *dns.Msg) {
 
 func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback, permissiveMode bool) nfqueue.HookFunc {
 	return func(attr nfqueue.Attribute) int {
+		// panics should be very rare, but worth recovering from them as
+		// defense in depth
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Error("recovered from panic", zap.Any("panic", r))
+				// attempt to set a drop verdict to fail closed; we don't
+				// know what caused the panic so this may panic as well, but
+				// chances are high that the panic happened in the callback,
+				// not when setting a verdict, and we don't want the nfqueue
+				// to fill up
+				setVerdict(logger, e, attr, dropVerdict, permissiveMode)
 			}
 		}()
 
