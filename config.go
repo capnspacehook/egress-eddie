@@ -35,6 +35,7 @@ type Config struct {
 
 	enforcerCreator enforcerCreator
 	sender          resolve.DNSSender
+	injector        resolve.DNSInjector
 }
 
 type FilterOptions struct {

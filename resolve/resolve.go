@@ -245,25 +245,34 @@ func (d *dohSender) TransportType() string {
 	return "https"
 }
 
-type DNSInjector struct {
+// DNSInjector injects synthetic DNS responses back to a client, used when
+// proxying requests over DoH.
+type DNSInjector interface {
+	// InjectResponse crafts and sends a UDP packet containing dnsResp to the
+	// client identified by srcAddr, appearing to come from dstAddr.
+	InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error
+	Close() error
+}
+
+type rawInjector struct {
 	mtx    sync.RWMutex
 	closed bool
 
 	socket int
 }
 
-func NewDNSInjector() (*DNSInjector, error) {
+func NewDNSInjector() (DNSInjector, error) {
 	sock, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, fmt.Errorf("creating raw socket: %w", err)
 	}
 
-	return &DNSInjector{
+	return &rawInjector{
 		socket: sock,
 	}, nil
 }
 
-func (d *DNSInjector) Close() error {
+func (d *rawInjector) Close() error {
 	d.mtx.Lock()
 	defer d.mtx.Unlock()
 
@@ -277,7 +286,7 @@ type netPacket interface {
 	gopacket.NetworkLayer
 }
 
-func (d *DNSInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error {
+func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error {
 	// TODO: cache interfaces?
 	var srcMAC, dstMAC net.HardwareAddr
 	var sa *unix.SockaddrLinklayer

@@ -113,7 +113,21 @@ func testFilterState(t *rapid.T) {
 		}
 		initMockEnforcers()
 		config.enforcerCreator = newMockEnforcer
-		config.sender = &mockSender{}
+		sender := &mockSender{}
+		config.sender = sender
+
+		// Each run is either plaintext or DoH mode; the filter is built once
+		// so the mode must be decided before CreateFilters. In DoH mode the
+		// filter re-issues queries itself (via the mock sender) and injects
+		// synthetic replies (via the mock injector), so no real DoH URL is
+		// needed. Setting the fields after parsing avoids re-running config
+		// validation and duplicating the config TOML.
+		doh := rapid.Bool().Draw(t, "doh")
+		injector := &mockInjector{}
+		if doh {
+			config.ResolveWithDoH = true
+			config.injector = injector
+		}
 
 		// setup answer IP filtering
 		allowedCIDRs := make([]netip.Prefix, rapid.IntRange(0, 3).Draw(t, "allowedCIDRs"))
@@ -163,7 +177,6 @@ func testFilterState(t *rapid.T) {
 
 		t.Repeat(map[string]func(*rapid.T){
 			"dns request": func(t *rapid.T) {
-				// TODO: in DoH mode the resolver should generate response
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
 				ep := drawEndpoint(t, ipv6)
 				connState := drawConnState(t)
@@ -174,18 +187,78 @@ func testFilterState(t *rapid.T) {
 					return
 				}
 
-				accept := !malformed && (connState == stateNew || connIsEstablished(connState)) && m.requestNameAllowed(parsed)
-				v, gotV := d.deliver(qDNSReq, connState, ipv6, packet)
-				assertVerdict(t, gotV, v, accept)
+				// A structurally-valid request for an allowed name on a live
+				// connection passes the gate: in plaintext mode it's accepted,
+				// in DoH mode it's the condition for the query to be re-issued
+				// to the resolver.
+				reaches := !malformed && (connState == stateNew || connIsEstablished(connState)) && m.requestNameAllowed(parsed)
 
-				// model the connection store on accept (counting cache).
-				if accept {
-					m.addPending(ep, parsed)
+				if !doh {
+					accept := reaches
+					v, gotV := d.deliver(qDNSReq, connState, ipv6, packet)
+					assertVerdict(t, gotV, v, accept)
+
+					// model the connection store on accept (counting cache).
+					if accept {
+						m.addPending(ep, parsed)
+					}
+					settleAndCheck()
+					return
+				}
+
+				// In DoH mode the filter proxies the query itself and
+				// always drops the original plaintext request. When the
+				// request reaches the resolver, the mock sender returns a
+				// correlated response whose valid answers are added to the
+				// allow lists and which is injected back to the client.
+				var resp *dns.Msg
+				var respMalformed bool
+				sender.called = false
+				sender.resp = nil
+
+				if reaches {
+					q := parsed.Question[0]
+					req := requestInfo{
+						id:     parsed.ID,
+						qName:  q.Header().Name,
+						qType:  dns.RRToType(q),
+						qClass: q.Header().Class,
+					}
+					resp, respMalformed = genResponseMsg(t, &storedReq{requestInfo: req}, true)
+					sender.resp = resp
+				}
+
+				injectsBefore := injector.count
+				v, gotV := d.deliver(qDNSReq, connState, ipv6, packet)
+				assertVerdict(t, gotV, v, false)
+
+				// the resolver is hit iff the request passed the gate.
+				if sender.called != reaches {
+					t.Fatalf("sender called: want %t got %t", reaches, sender.called)
+				}
+
+				// proxyDoH accepts (and injects) iff the correlated
+				// response passes the same validation the plaintext
+				// response path uses, minus the ID check.
+				proxied := reaches && !respMalformed && m.responseConditionalAccept(resp)
+				if proxied {
+					m.answerSideEffects(resp)
+				}
+				// a response is injected iff proxyDoH succeeded.
+				wantInjects := injectsBefore
+				if proxied {
+					wantInjects++
+				}
+				if injector.count != wantInjects {
+					t.Fatalf("injector count: want %d got %d", wantInjects, injector.count)
 				}
 				settleAndCheck()
 			},
 			"dns response": func(t *rapid.T) {
-				// TODO: in DoH mode, all should be rejected
+				// In DoH mode the filter never records a connection (requests
+				// are proxied, not accepted), so m.pending is always empty,
+				// found is always false, and every plaintext response is
+				// dropped as unsolicited. The assertion below locks that in.
 				ipv6 := rapid.Bool().Draw(t, "ipv6")
 				ep := drawResponseEndpoint(t, m, ipv6)
 				connState := drawConnState(t)
@@ -199,7 +272,7 @@ func testFilterState(t *rapid.T) {
 				var msg *dns.Msg
 				var malformed bool
 				if havePending {
-					msg, malformed = genResponseMsg(t, req)
+					msg, malformed = genResponseMsg(t, req, false)
 				} else {
 					msg, _ = genResponseMsg(t, &storedReq{
 						requestInfo: requestInfo{
@@ -208,7 +281,7 @@ func testFilterState(t *rapid.T) {
 							qType:  dns.TypeA,
 							qClass: dns.ClassINET,
 						},
-					})
+					}, false)
 					// we don't need to set malformed as if this isn't
 					// for a pending request this should always be dropped
 				}
@@ -221,6 +294,9 @@ func testFilterState(t *rapid.T) {
 				established := connIsEstablished(connState)
 				found := havePending && established
 				accept := found && !malformed && m.responseConditionalAccept(parsed)
+				if doh && accept {
+					t.Fatal("plaintext DNS response accepted in DoH mode")
+				}
 
 				v, gotV := d.deliver(qInbound, connState, ipv6, packet)
 				assertVerdict(t, gotV, v, accept)
@@ -229,14 +305,7 @@ func testFilterState(t *rapid.T) {
 					m.removePending(connID)
 				}
 				if accept {
-					dl := time.Now().Add(m.allowAnswersFor)
-					addIPs, addDoms := answerSideEffects(parsed)
-					for _, ip := range addIPs {
-						m.allowedIPs[ip] = dl
-					}
-					for _, dom := range addDoms {
-						m.targetDomains[dom] = dl
-					}
+					m.answerSideEffects(parsed)
 				}
 				settleAndCheck()
 			},
@@ -318,12 +387,16 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 // independently to exercise compareDNSReqResp. The answer section is built as a
 // chain: each RR's target becomes the next RR's owner, mirroring real CNAME/SRV
 // chains so the in-order allowedTargets accumulation is tested.
-func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
+//
+// When matchID is true the response ID always matches the request and is never
+// mismatched: this models DoH mode, where proxyDoH forces resp.ID = req.id
+// before validating, so an ID mismatch can never cause a rejection.
+func genResponseMsg(t *rapid.T, req *storedReq, matchID bool) (_ *dns.Msg, malformed bool) {
 	msg := new(dns.Msg)
 	msg.Response = true
 
 	msg.ID = req.id
-	if rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
+	if !matchID && rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
 		msg.ID = uint16(rapid.IntRange(0, 0xffff).Draw(t, "wrongID"))
 		malformed = msg.ID != req.id
 		t.Log("possibly mismatched IDs")

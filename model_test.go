@@ -294,24 +294,24 @@ func (m *model) answersValid(msg *dns.Msg) bool {
 
 // answerSideEffects mirrors the side-effect loop of the response callback.
 // Only valid to call on a fully-accepted reply.
-func answerSideEffects(msg *dns.Msg) (addIPs []netip.Addr, addTargets []string) {
+func (m *model) answerSideEffects(msg *dns.Msg) {
+	dl := time.Now().Add(m.allowAnswersFor)
+
 	for _, a := range msg.Answer {
 		switch ans := a.(type) {
 		case *dns.A:
-			addIPs = append(addIPs, ans.Addr)
+			m.allowedIPs[ans.Addr] = dl
 		case *dns.AAAA:
-			addIPs = append(addIPs, ans.Addr)
+			m.allowedIPs[ans.Addr] = dl
 			if ans.Addr.Is4In6() {
-				addIPs = append(addIPs, ans.Addr.Unmap())
+				m.allowedIPs[ans.Addr.Unmap()] = dl
 			}
 		default:
 			if t, tb, _ := rrTarget(a); tb && t != "" && t != "." {
-				addTargets = append(addTargets, norm(t))
+				m.targetDomains[norm(t)] = dl
 			}
 		}
 	}
-
-	return addIPs, addTargets
 }
 
 // rrTarget mirrors the type switch in validateDNSAnswers exactly.

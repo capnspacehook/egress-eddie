@@ -57,7 +57,7 @@ type FilterManager struct {
 
 	queueNum uint16
 
-	injector *resolve.DNSInjector
+	injector resolve.DNSInjector
 
 	dnsRespNF enforcer
 
@@ -84,7 +84,7 @@ type filter struct {
 	addrChecker *ssrf.Guardian
 
 	sender   resolve.DNSSender
-	injector *resolve.DNSInjector
+	injector resolve.DNSInjector
 
 	connections    *timedcache.TimedCache[connectionID, requestInfo]
 	allowedIPs     *timedcache.TimedCache[netip.Addr, struct{}]
@@ -192,19 +192,23 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 	})
 
 	dnsSender := config.sender
-	if dnsSender == nil {
-		var err error
-		if config.ResolveWithDoH {
+	f.injector = config.injector
+	if config.ResolveWithDoH {
+		if dnsSender == nil {
 			dnsSender = resolve.NewDoHSender(config.DoHURL, config.DoHServerName)
+		}
+		if f.injector == nil {
+			var err error
 			f.injector, err = resolve.NewDNSInjector()
 			if err != nil {
 				return nil, err
 			}
-		} else if anyCachedDomains {
-			dnsSender, err = resolve.NewUDPSender(config.ResolverIP)
-			if err != nil {
-				return nil, fmt.Errorf("creating UDP sender: %w", err)
-			}
+		}
+	} else if dnsSender == nil && anyCachedDomains {
+		var err error
+		dnsSender, err = resolve.NewUDPSender(config.ResolverIP)
+		if err != nil {
+			return nil, fmt.Errorf("creating UDP sender: %w", err)
 		}
 	}
 
@@ -281,7 +285,7 @@ func (f *FilterManager) Stop() {
 	}
 }
 
-func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter, permissiveMode, fullDNSLogging bool, newEnforcer enforcerCreator, sender resolve.DNSSender, validateResp resolve.ValidateRespCallback, injector *resolve.DNSInjector) (*filter, error) {
+func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, isSelfFilter, permissiveMode, fullDNSLogging bool, newEnforcer enforcerCreator, sender resolve.DNSSender, validateResp resolve.ValidateRespCallback, injector resolve.DNSInjector) (*filter, error) {
 	filterLogger := logger
 	if opts.Name != "" {
 		filterLogger = filterLogger.With(zap.String("filter.name", opts.Name))
