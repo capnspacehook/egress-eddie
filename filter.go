@@ -756,9 +756,8 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 
 	// build connection ID so dns requests/responses can be correlated
 	var (
-		src, dst         netip.Addr
-		srcPort, dstPort uint16
-		srcOK, dstOK     bool
+		src, dst     netip.Addr
+		srcOK, dstOK bool
 	)
 
 	switch decoded[0] {
@@ -775,8 +774,17 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 		return nil, connectionID{}, errors.New("converting IPs")
 	}
 
-	srcPort = uint16(udp.SrcPort)
-	dstPort = uint16(udp.DstPort)
+	var srcPort, dstPort uint16
+	var payload []byte
+	if lType == layers.LayerTypeUDP {
+		srcPort = uint16(udp.SrcPort)
+		dstPort = uint16(udp.DstPort)
+		payload = udp.Payload
+	} else {
+		srcPort = uint16(tcp.SrcPort)
+		dstPort = uint16(tcp.DstPort)
+		payload = tcp.Payload
+	}
 
 	connID := connectionID{}
 	if inbound {
@@ -785,13 +793,6 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 	} else {
 		connID.src = netip.AddrPortFrom(src, srcPort)
 		connID.dst = netip.AddrPortFrom(dst, dstPort)
-	}
-
-	var payload []byte
-	if lType == layers.LayerTypeUDP {
-		payload = udp.Payload
-	} else {
-		payload = tcp.Payload
 	}
 
 	return payload, connID, nil
