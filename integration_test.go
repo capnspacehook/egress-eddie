@@ -294,6 +294,9 @@ cachedTargets = [
 			is.NoErr(err)
 
 			addrs, errs := resolve.Domain(getTimeout(t), "deb.debian.org", sender, nil)
+			if len(errs) > 0 {
+				t.Logf("errors resolving domain: %v", errs)
+			}
 			is.True(len(errs) == 0)
 
 			initFilters(

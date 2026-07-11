@@ -21,6 +21,7 @@ import (
 
 	"github.com/capnspacehook/egress-eddie/resolve"
 	"github.com/capnspacehook/egress-eddie/timedcache"
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 const (
@@ -32,6 +33,10 @@ const (
 	stateEstablishedReply = stateEstablished + stateIsReply
 	stateRelatedReply     = stateRelated + stateIsReply
 	stateUntracked        = 7
+
+	// TODO: make configurable?
+	numBufferedDoHRequests = 128
+	numDoHWorkers          = 4
 
 	componentKey = "component"
 )
@@ -85,10 +90,11 @@ type filter struct {
 
 	addrChecker *ssrf.Guardian
 
-	sender   resolve.DNSSender
-	injector resolve.DNSInjector
+	sender     resolve.DNSSender
+	dohQueries chan dohRequest
+	injector   resolve.DNSInjector
 
-	connections    *timedcache.TimedCache[connectionID, requestInfo]
+	connections    *timedcache.TimedCache[types.ConnectionID, types.RequestInfo]
 	allowedIPs     *timedcache.TimedCache[netip.Addr, struct{}]
 	allowedTargets *timedcache.TimedCache[string, struct{}]
 
@@ -123,28 +129,11 @@ func (s *signaler) shouldAbort() <-chan struct{} {
 	return s.abortCh
 }
 
-// connectionID is used to correlate DNS requests and responses from
-// the same connection
-type connectionID struct {
-	src netip.AddrPort
-	dst netip.AddrPort
-}
-
-func (c connectionID) String() string {
-	var b strings.Builder
-
-	b.WriteString(c.src.String())
-	b.WriteRune('-')
-	b.WriteString(c.dst.String())
-
-	return b.String()
-}
-
-type requestInfo struct {
-	id     uint16
-	qName  string
-	qType  uint16
-	qClass uint16
+type dohRequest struct {
+	reqMsg *dns.Msg
+	ri     types.RequestInfo
+	connID types.ConnectionID
+	attr   nfqueue.Attribute
 }
 
 // enforcer sets verdicts on packets.
@@ -303,7 +292,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		logger:          filterLogger,
 		sender:          sender,
 		injector:        injector,
-		connections:     timedcache.New[connectionID, requestInfo](logger, true),
+		connections:     timedcache.New[types.ConnectionID, types.RequestInfo](logger, true),
 		isSelfFilter:    isSelfFilter,
 	}
 
@@ -349,15 +338,19 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 			ssrf.WithDeniedV4Prefixes(disallowedIPv4Prefixes...),
 			ssrf.WithDeniedV6Prefixes(disallowedIPv6Prefixes...),
 		)
+
+		f.dohQueries = make(chan dohRequest, numBufferedDoHRequests)
+		if f.injector != nil {
+			f.handleDoHRequests(ctx, filterLogger, numDoHWorkers)
+		}
 	}
 
 	if opts.DNSQueue != 0 {
-		nf, err := newEnforcer(ctx, filterLogger, opts.DNSQueue, newDNSRequestCallback(ctx, &f))
+		nf, err := newEnforcer(ctx, filterLogger, opts.DNSQueue, newDNSRequestCallback(&f))
 		if err != nil {
 			return nil, fmt.Errorf("starting DNS nfqueues: %w", err)
 		}
 		f.dnsReqNF = nf
-
 	}
 
 	return &f, nil
@@ -438,6 +431,9 @@ func (f *filter) close() {
 		}
 	}
 
+	if f.dohQueries != nil {
+		close(f.dohQueries)
+	}
 	f.wg.Wait()
 
 	if f.dnsReqNF != nil {
@@ -459,6 +455,7 @@ func (f *filter) close() {
 // validateDNSResponse validates a DNS response against a DNS request.
 // This is really only useful for cacheDomains of various filters
 // to use the self-filter to check DoH responses.
+// TODO: possible to scope matchers per filter?
 func (f *filter) validateDNSResponse(reqMsg, respMsg *dns.Msg) error {
 	ri, err := newRequestInfo(reqMsg)
 	if err != nil {
@@ -499,9 +496,12 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 		validateResp = f.validateDNSResponse
 	}
 
+	// TODO: rename to pre-lookup? pre-resolve?
 	logger = logger.With(zap.String(componentKey, "cache"))
 	logger.Debug("starting cache loop", zap.String("transport", f.sender.TransportType()))
 
+	// don't use the filter's waitgroup as we will wait for all goroutines
+	// to complete each loop iteration
 	var wg sync.WaitGroup
 	// add to the user supplied duration to ensure there isn't a
 	// window where domains are not allowed
@@ -560,7 +560,31 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 	}
 }
 
-func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
+func (f *filter) handleDoHRequests(ctx context.Context, logger *zap.Logger, numWorkers int) {
+	logger = logger.With(zap.String(componentKey, "doh-proxy"))
+
+	for range numWorkers {
+		f.wg.Go(func() {
+			for r := range f.dohQueries {
+				logger.Info("forwarding DNS request over DoH", dnsFields(r.reqMsg, f.fullDNSLogging)...)
+				respMsg, err := f.proxyDoH(ctx, r.reqMsg, r.ri)
+				if err != nil {
+					logger.Error("forwarding DoH request", zap.Error(err))
+					continue
+				}
+				f.handleAnswers(respMsg)
+
+				logger.Info("injecting DNS response from DoH", dnsFields(respMsg, f.fullDNSLogging)...)
+				if err := f.injector.InjectResponse(respMsg, r.connID.Src, r.connID.Dst, r.attr); err != nil {
+					logger.Error("injecting DNS response", zap.Error(err))
+					continue
+				}
+			}
+		})
+	}
+}
+
+func newDNSRequestCallback(f *filter) hookCreator {
 	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
@@ -608,7 +632,7 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 				logger.Error("parsing DNS packet", fields...)
 				return dropVerdict
 			}
-			logger := logger.With(zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
+			logger := logger.With(zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
 
 			if reqMsg.Opcode != dns.OpcodeQuery {
 				logger.Warn("dropping DNS request with non-query opcode", dnsFields(reqMsg, f.fullDNSLogging)...)
@@ -628,19 +652,14 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 				return dropVerdict
 			}
 
+			// if the injector is set we should always proxy requests
+			// over DoH
 			if f.injector != nil {
-				logger.Info("forwarding DNS request over DoH", dnsFields(reqMsg, f.fullDNSLogging)...)
-				respMsg, err := f.proxyDoH(ctx, reqMsg, ri)
-				if err != nil {
-					logger.Error("forwarding DoH request", zap.Error(err))
-					return dropVerdict
-				}
-				f.handleAnswers(respMsg)
-
-				logger.Info("injecting DNS response from DoH", dnsFields(respMsg, f.fullDNSLogging)...)
-				if err := f.injector.InjectResponse(respMsg, connID.src, connID.dst, attr); err != nil {
-					logger.Error("injecting DNS response", zap.Error(err))
-					return dropVerdict
+				f.dohQueries <- dohRequest{
+					reqMsg: reqMsg,
+					ri:     ri,
+					connID: connID,
+					attr:   attr,
 				}
 
 				// If we are proxying the response over DoH, always drop
@@ -676,14 +695,14 @@ func newDNSRequestCallback(ctx context.Context, f *filter) hookCreator {
 
 // proxyDoH forwards a DNS request over DoH, verifies the response and
 // returns it if it's allowed.
-func (f *filter) proxyDoH(ctx context.Context, reqMsg *dns.Msg, ri requestInfo) (*dns.Msg, error) {
+func (f *filter) proxyDoH(ctx context.Context, reqMsg *dns.Msg, ri types.RequestInfo) (*dns.Msg, error) {
 	respMsg, err := f.sender.SendRequest(ctx, reqMsg)
 	if err != nil {
 		return nil, fmt.Errorf("forwarding DoH request: %w", err)
 	}
 	// dnshttp.NewRequest sets the message ID to zero, so we need to
 	// set it back
-	respMsg.ID = ri.id
+	respMsg.ID = ri.ID
 
 	// confirm that the request and response question matches
 	if err := f.compareDNSReqResp(ri, respMsg); err != nil {
@@ -702,21 +721,21 @@ func (f *filter) proxyDoH(ctx context.Context, reqMsg *dns.Msg, ri requestInfo) 
 	return respMsg, nil
 }
 
-func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, connectionID, error) {
+func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, types.ConnectionID, error) {
 	payload, connID, err := parseLayer4Packet(packet, true, ipv6, inbound)
 	if err != nil {
-		return nil, connectionID{}, err
+		return nil, types.ConnectionID{}, err
 	}
 
 	dnsMsg := dns.Msg{Data: payload}
 	if err := dnsMsg.Unpack(); err != nil {
-		return nil, connectionID{}, fmt.Errorf("decoding DNS message: %w", err)
+		return nil, types.ConnectionID{}, fmt.Errorf("decoding DNS message: %w", err)
 	}
 
 	return &dnsMsg, connID, nil
 }
 
-func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, connectionID, error) {
+func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, types.ConnectionID, error) {
 	var (
 		ip4     layers.IPv4
 		ip6     layers.IPv6
@@ -743,15 +762,15 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 	parser.IgnoreUnsupported = true
 
 	if err := parser.DecodeLayers(packet, &decoded); err != nil {
-		return nil, connectionID{}, fmt.Errorf("decoding packet: %w", err)
+		return nil, types.ConnectionID{}, fmt.Errorf("decoding packet: %w", err)
 	}
 	if len(decoded) != 2 {
-		return nil, connectionID{}, fmt.Errorf("%d layers were parsed, expecting 2", len(decoded))
+		return nil, types.ConnectionID{}, fmt.Errorf("%d layers were parsed, expecting 2", len(decoded))
 	}
 
 	lType := decoded[1]
 	if (expectUDP && lType != layers.LayerTypeUDP) || (lType != layers.LayerTypeUDP && lType != layers.LayerTypeTCP) {
-		return nil, connectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", lType)
+		return nil, types.ConnectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", lType)
 	}
 
 	// build connection ID so dns requests/responses can be correlated
@@ -768,10 +787,10 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 		src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
 		dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
 	default:
-		return nil, connectionID{}, fmt.Errorf("unknown IP protocol %s", decoded[0])
+		return nil, types.ConnectionID{}, fmt.Errorf("unknown IP protocol %s", decoded[0])
 	}
 	if !srcOK || !dstOK {
-		return nil, connectionID{}, errors.New("converting IPs")
+		return nil, types.ConnectionID{}, errors.New("converting IPs")
 	}
 
 	var srcPort, dstPort uint16
@@ -786,50 +805,50 @@ func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, co
 		payload = tcp.Payload
 	}
 
-	connID := connectionID{}
+	connID := types.ConnectionID{}
 	if inbound {
-		connID.src = netip.AddrPortFrom(dst, dstPort)
-		connID.dst = netip.AddrPortFrom(src, srcPort)
+		connID.Src = netip.AddrPortFrom(dst, dstPort)
+		connID.Dst = netip.AddrPortFrom(src, srcPort)
 	} else {
-		connID.src = netip.AddrPortFrom(src, srcPort)
-		connID.dst = netip.AddrPortFrom(dst, dstPort)
+		connID.Src = netip.AddrPortFrom(src, srcPort)
+		connID.Dst = netip.AddrPortFrom(dst, dstPort)
 	}
 
 	return payload, connID, nil
 }
 
-func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (requestInfo, error) {
+func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (types.RequestInfo, error) {
 	if len(dnsMsg.Question) > 1 {
 		// drop DNS requests with more than one question; this is
 		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
-		return requestInfo{}, fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
+		return types.RequestInfo{}, fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
 	}
 
 	ri, err := newRequestInfo(dnsMsg)
 	if err != nil {
-		return requestInfo{}, err
+		return types.RequestInfo{}, err
 	}
 
-	if ri.qClass != dns.ClassINET {
-		return requestInfo{}, fmt.Errorf("question class %s is not INET", qClassToString(ri.qClass))
+	if ri.Class != dns.ClassINET {
+		return types.RequestInfo{}, fmt.Errorf("question class %s is not INET", qClassToString(ri.Class))
 	}
-	if !slices.Contains(allowedRRTypes, ri.qType) {
-		return requestInfo{}, fmt.Errorf("question type %s is not allowed", rrTypeToString(ri.qType))
+	if !slices.Contains(allowedRRTypes, ri.Type) {
+		return types.RequestInfo{}, fmt.Errorf("question type %s is not allowed", rrTypeToString(ri.Type))
 	}
 
-	ok, err := f.validateDNSName(ri.qType, ri.qName)
+	ok, err := f.validateDNSName(ri.Type, ri.Name)
 	if err != nil {
-		return requestInfo{}, fmt.Errorf("validating domain name %q in question: %w", ri.qName, err)
+		return types.RequestInfo{}, fmt.Errorf("validating domain name %q in question: %w", ri.Name, err)
 	}
 	if !ok {
-		return requestInfo{}, fmt.Errorf("domain name %q in question is not allowed", ri.qName)
+		return types.RequestInfo{}, fmt.Errorf("domain name %q in question is not allowed", ri.Name)
 	}
 
 	return ri, nil
 }
 
-func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
-	if req.id != resp.ID {
+func (f *filter) compareDNSReqResp(req types.RequestInfo, resp *dns.Msg) error {
+	if req.ID != resp.ID {
 		return errors.New("request and response IDs do not match")
 	}
 	if len(resp.Question) == 0 {
@@ -849,11 +868,11 @@ func (f *filter) compareDNSReqResp(req requestInfo, resp *dns.Msg) error {
 	}
 	qType := dns.RRToType(respQ)
 
-	if req.qType != qType {
+	if req.Type != qType {
 		return errors.New("request and response question types do not match")
-	} else if req.qClass != respQHdr.Class {
+	} else if req.Class != respQHdr.Class {
 		return errors.New("request and response question classes do not match")
-	} else if !strings.EqualFold(req.qName, respQHdr.Name) {
+	} else if !strings.EqualFold(req.Name, respQHdr.Name) {
 		return errors.New("request and response question names do not match")
 	}
 
@@ -1158,10 +1177,10 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				logger.Error("parsing DNS packet", fields...)
 				return dropVerdict
 			}
-			logger := logger.With(zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
+			logger := logger.With(zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
 
 			var connFilter *filter
-			var reqInfo requestInfo
+			var reqInfo types.RequestInfo
 			for _, filter := range f.filters {
 				if ri, ok := filter.connections.Lookup(connID); ok {
 					connFilter = filter
@@ -1267,12 +1286,12 @@ func newGenericCallback(f *filter) hookCreator {
 			}
 
 			// validate that the destination IP is allowed
-			if f.allowedIPs.Exists(connID.dst.Addr()) {
-				logger.Info("allowing packet", zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
+			if f.allowedIPs.Exists(connID.Dst.Addr()) {
+				logger.Info("allowing packet", zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
 				return acceptVerdict
 			}
 
-			logger.Info("dropping packet", zap.Stringer("conn.src", connID.src), zap.Stringer("conn.dst", connID.dst))
+			logger.Info("dropping packet", zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
 			return dropVerdict
 		}
 	}

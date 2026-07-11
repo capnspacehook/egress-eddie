@@ -9,6 +9,8 @@ import (
 	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 func connIsEstablished(state uint32) bool {
@@ -64,25 +66,25 @@ func stripPrefixLabels(domain string) (string, int) {
 	return domain[idx:], numFound
 }
 
-func newRequestInfo(dnsMsg *dns.Msg) (requestInfo, error) {
+func newRequestInfo(dnsMsg *dns.Msg) (types.RequestInfo, error) {
 	if len(dnsMsg.Question) == 0 {
 		// drop DNS requests with no questions; this probably
 		// doesn't happen in practice but doesn't hurt to
 		// handle this case
-		return requestInfo{}, errors.New("no questions in DNS request")
+		return types.RequestInfo{}, errors.New("no questions in DNS request")
 	}
 
 	q := dnsMsg.Question[0]
 	h := q.Header()
 	if h == nil {
-		return requestInfo{}, errors.New("question header is nil")
+		return types.RequestInfo{}, errors.New("question header is nil")
 	}
 
-	return requestInfo{
-		id:     dnsMsg.ID,
-		qName:  h.Name,
-		qType:  dns.RRToType(q),
-		qClass: h.Class,
+	return types.RequestInfo{
+		ID:    dnsMsg.ID,
+		Name:  h.Name,
+		Type:  dns.RRToType(q),
+		Class: h.Class,
 	}, nil
 }
 

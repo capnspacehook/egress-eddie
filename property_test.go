@@ -20,6 +20,8 @@ import (
 	"github.com/gopacket/gopacket/layers"
 	"golang.org/x/sys/unix"
 	"pgregory.net/rapid"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 const (
@@ -193,7 +195,7 @@ func testFilterState(t *rapid.T) {
 				// connection passes the gate: in plaintext mode it's accepted,
 				// in DoH mode it's the condition for the query to be re-issued
 				// to the resolver.
-				reaches := !malformed && (connState == stateNew || connIsEstablished(connState)) && m.requestNameAllowed(parsed)
+				reaches := !malformed && (connState == stateNew || connIsEstablished(connState)) && m.requestNameAllowed(t, parsed)
 
 				if !doh {
 					accept := reaches
@@ -220,19 +222,22 @@ func testFilterState(t *rapid.T) {
 
 				if reaches {
 					q := parsed.Question[0]
-					req := requestInfo{
-						id:     parsed.ID,
-						qName:  q.Header().Name,
-						qType:  dns.RRToType(q),
-						qClass: q.Header().Class,
+					req := types.RequestInfo{
+						ID:    parsed.ID,
+						Name:  q.Header().Name,
+						Type:  dns.RRToType(q),
+						Class: q.Header().Class,
 					}
-					resp, respMalformed = genResponseMsg(t, &storedReq{requestInfo: req}, true)
+					resp, respMalformed = genResponseMsg(t, &storedReq{RequestInfo: req}, true)
 					sender.resp = resp
 				}
 
 				injectsBefore := injector.count
 				v, gotV := d.deliver(qDNSReq, connState, ipv6, packet)
 				assertVerdict(t, gotV, v, false)
+
+				// wait until the DoH proxying goroutines have finished
+				synctest.Wait()
 
 				// the resolver is hit iff the request passed the gate.
 				if sender.called != reaches {
@@ -242,7 +247,7 @@ func testFilterState(t *rapid.T) {
 				// proxyDoH accepts (and injects) iff the correlated
 				// response passes the same validation the plaintext
 				// response path uses, minus the ID check.
-				proxied := reaches && !respMalformed && m.responseConditionalAccept(resp)
+				proxied := reaches && !respMalformed && m.responseConditionalAccept(t, resp)
 				if proxied {
 					m.answerSideEffects(resp)
 				}
@@ -277,11 +282,11 @@ func testFilterState(t *rapid.T) {
 					msg, malformed = genResponseMsg(t, req, false)
 				} else {
 					msg, _ = genResponseMsg(t, &storedReq{
-						requestInfo: requestInfo{
-							id:     uint16(rapid.IntRange(0, 0xffff).Draw(t, "randomID")),
-							qName:  dnsutil.Fqdn(genBaseName(t)),
-							qType:  dns.TypeA,
-							qClass: dns.ClassINET,
+						RequestInfo: types.RequestInfo{
+							ID:    uint16(rapid.IntRange(0, 0xffff).Draw(t, "randomID")),
+							Name:  dnsutil.Fqdn(genBaseName(t)),
+							Type:  dns.TypeA,
+							Class: dns.ClassINET,
 						},
 					}, false)
 					// we don't need to set malformed as if this isn't
@@ -295,7 +300,7 @@ func testFilterState(t *rapid.T) {
 
 				established := connIsEstablished(connState)
 				found := havePending && established
-				accept := found && !malformed && m.responseConditionalAccept(parsed)
+				accept := found && !malformed && m.responseConditionalAccept(t, parsed)
 				if doh && accept {
 					t.Fatal("plaintext DNS response accepted in DoH mode")
 				}
@@ -397,17 +402,17 @@ func genResponseMsg(t *rapid.T, req *storedReq, matchID bool) (_ *dns.Msg, malfo
 	msg := new(dns.Msg)
 	msg.Response = true
 
-	msg.ID = req.id
+	msg.ID = req.ID
 	if !matchID && rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
 		msg.ID = uint16(rapid.IntRange(0, 0xffff).Draw(t, "wrongID"))
-		malformed = msg.ID != req.id
+		malformed = msg.ID != req.ID
 		t.Log("possibly mismatched IDs")
 	}
 
-	qType := req.qType
+	qType := req.Type
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQType") == 0 {
 		qType = genQType(t)
-		if qType == dns.TypeTXT || qType != req.qType {
+		if qType == dns.TypeTXT || qType != req.Type {
 			t.Log("mismatched QTypes")
 			malformed = true
 		}
@@ -415,22 +420,22 @@ func genResponseMsg(t *rapid.T, req *storedReq, matchID bool) (_ *dns.Msg, malfo
 
 	q := dns.TypeToRR[qType]()
 	qHdr := q.Header()
-	qHdr.Class = req.qClass
+	qHdr.Class = req.Class
 
 	if rapid.IntRange(0, 4).Draw(t, "mismatchQName") == 0 {
 		baseName, badBaseName := genBaseNameClassified(t)
 		name, badName := genNameClassified(t, baseName, qType)
 		qHdr.Name = dnsutil.Fqdn(name)
-		if badBaseName || badName || !strings.EqualFold(qHdr.Name, req.qName) {
+		if badBaseName || badName || !strings.EqualFold(qHdr.Name, req.Name) {
 			t.Log("mismatched QNames")
 			malformed = true
 		}
 	} else {
-		qHdr.Name = genCase(t, req.qName)
+		qHdr.Name = genCase(t, req.Name)
 	}
 	if rapid.IntRange(0, 6).Draw(t, "mismatchQClass") == 0 {
 		qHdr.Class = genClass(t)
-		if qHdr.Class != req.qClass {
+		if qHdr.Class != req.Class {
 			t.Log("mismatched QClasses")
 			malformed = true
 		}
@@ -438,7 +443,7 @@ func genResponseMsg(t *rapid.T, req *storedReq, matchID bool) (_ *dns.Msg, malfo
 	msg.Question = []dns.RR{q}
 
 	n := rapid.IntRange(0, 3).Draw(t, "nAnswers")
-	owner := req.qName // first owner is the (correlated) question name
+	owner := req.Name // first owner is the (correlated) question name
 	for range n {
 		rr, badRR := genAnswerRRClassified(t, genCase(t, owner))
 		if badRR {
@@ -795,10 +800,10 @@ func drawEndpoint(t *rapid.T, ipv6 bool) endpoint {
 	}
 }
 
-func (e endpoint) connID() connectionID {
-	return connectionID{
-		src: netip.AddrPortFrom(e.client, e.port),
-		dst: netip.AddrPortFrom(e.server, 53),
+func (e endpoint) connID() types.ConnectionID {
+	return types.ConnectionID{
+		Src: netip.AddrPortFrom(e.client, e.port),
+		Dst: netip.AddrPortFrom(e.server, 53),
 	}
 }
 
@@ -810,11 +815,11 @@ func (e endpoint) connID() connectionID {
 func drawResponseEndpoint(t *rapid.T, m *model, ipv6 bool) endpoint {
 	var pending []endpoint
 	for connID := range m.pending {
-		if connID.src.Addr().Is6() == ipv6 {
+		if connID.Src.Addr().Is6() == ipv6 {
 			pending = append(pending, endpoint{
-				client: connID.src.Addr(),
-				server: connID.dst.Addr(),
-				port:   connID.src.Port(),
+				client: connID.Src.Addr(),
+				server: connID.Dst.Addr(),
+				port:   connID.Src.Port(),
 			})
 		}
 	}

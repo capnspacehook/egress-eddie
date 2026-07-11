@@ -14,19 +14,20 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/capnspacehook/egress-eddie/resolve"
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 // storedReq mirrors what the request callback stores in f.connections
 // (a counting cache: repeated requests on the same connID increment count and
 // keep the FIRST stored value).
 type storedReq struct {
-	requestInfo
+	types.RequestInfo
 	count  int       // counting-cache count (0 == one outstanding)
 	expiry time.Time // now + dnsQueryTimeout, refreshed on each Add
 }
 
 type model struct {
-	pending         map[connectionID]*storedReq
+	pending         map[types.ConnectionID]*storedReq
 	addrChecker     *ssrf.Guardian
 	allowedIPs      map[netip.Addr]time.Time // value == expiry deadline
 	targetDomains   map[string]time.Time     // value == expiry deadline
@@ -35,7 +36,7 @@ type model struct {
 
 func newModel(ac *ssrf.Guardian) *model {
 	return &model{
-		pending:         make(map[connectionID]*storedReq),
+		pending:         make(map[types.ConnectionID]*storedReq),
 		addrChecker:     ac,
 		allowedIPs:      make(map[netip.Addr]time.Time),
 		targetDomains:   make(map[string]time.Time),
@@ -108,11 +109,11 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 	}
 
 	m.pending[connID] = &storedReq{
-		requestInfo: requestInfo{
-			id:     msg.ID,
-			qName:  qHdr.Name,
-			qType:  dns.RRToType(q),
-			qClass: qHdr.Class,
+		RequestInfo: types.RequestInfo{
+			ID:    msg.ID,
+			Name:  qHdr.Name,
+			Type:  dns.RRToType(q),
+			Class: qHdr.Class,
 		},
 		count:  0,
 		expiry: dl,
@@ -120,7 +121,7 @@ func (m *model) addPending(ep endpoint, msg *dns.Msg) {
 }
 
 // removePending models f.connections.Remove (counting cache).
-func (m *model) removePending(connID connectionID) {
+func (m *model) removePending(connID types.ConnectionID) {
 	r, ok := m.pending[connID]
 	if !ok {
 		return
@@ -146,63 +147,79 @@ func inAllowedTargets(name string) bool {
 }
 
 // domainAllowed mirrors (*filter).domainAllowed for a question/owner name.
-func (m *model) domainAllowed(name string) bool {
+func (m *model) domainAllowed(t *rapid.T, name string) bool {
 	n := norm(name)
 	if !wellFormedName(n) {
+		t.Log("invalid name")
 		return false
 	}
 	if inAllowedDomains(n) {
 		return true
 	}
 	_, ok := m.targetDomains[n]
-	return ok
+	if ok {
+		return true
+	}
+
+	t.Log("not in allowedDomains")
+	return false
 }
 
 // validateName mirrors (*filter).validateDNSName: it applies the qtype-driven
 // _prefix-label rules, then falls back to the membership check. It reuses the
 // production stripPrefixLabels (format logic, safe to share) but NOT the glob
 // matcher (which domainAllowed reimplements as a pool lookup).
-func (m *model) validateName(qtype uint16, name string) bool {
+func (m *model) validateName(t *rapid.T, qtype uint16, name string) bool {
 	var stripped string
 	switch qtype {
 	case dns.TypeSRV:
 		s, n := stripPrefixLabels(name)
 		if n != 2 {
+			t.Log("invalid SRV prefix label count")
 			return false
 		}
 		stripped = s
 	case dns.TypeHTTPS:
 		s, n := stripPrefixLabels(name)
 		if n != 0 && n != 2 {
+			t.Log("invalid HTTPS prefix label count")
 			return false
 		}
 		stripped = s
 	case dns.TypeSVCB:
 		s, n := stripPrefixLabels(name)
 		if n == 0 || n > 2 {
+			t.Log("invalid SVCB prefix label count")
 			return false
 		}
 		stripped = s
 	default:
 		stripped = name
 	}
-	return m.domainAllowed(stripped)
+
+	return m.domainAllowed(t, stripped)
 }
 
 // targetAllowed mirrors (*filter).targetAllowed.
-func (m *model) targetAllowed(target string) bool {
+func (m *model) targetAllowed(t *rapid.T, target string) bool {
 	if target == "." {
 		return true
 	}
 	n := norm(target)
 	if !wellFormedName(n) {
+		t.Log("invalid target name")
 		return false
 	}
 	if inAllowedTargets(n) || inAllowedDomains(n) {
 		return true
 	}
 	_, ok := m.targetDomains[n]
-	return ok
+	if ok {
+		return true
+	}
+
+	t.Log("not in allowedTargets")
+	return false
 }
 
 // wellFormedName reports whether validDomainName accepts the (normalized) name,
@@ -223,29 +240,29 @@ func wellFormedName(n string) bool {
 
 // requestNameAllowed assumes a structurally valid request (gate passed): is the
 // single question name allowed?
-func (m *model) requestNameAllowed(msg *dns.Msg) bool {
+func (m *model) requestNameAllowed(t *rapid.T, msg *dns.Msg) bool {
 	q := msg.Question[0]
 
-	return m.validateName(dns.RRToType(q), q.Header().Name)
+	return m.validateName(t, dns.RRToType(q), q.Header().Name)
 }
 
 // responseConditionalAccept assumes an established connection with a correlated
 // outstanding request (gate passed): is the response allowed? Question
 // allowlist plus the in-order answer-chain validation.
-func (m *model) responseConditionalAccept(msg *dns.Msg) bool {
+func (m *model) responseConditionalAccept(t *rapid.T, msg *dns.Msg) bool {
 	q := msg.Question[0]
-	if len(msg.Question) != 1 || !m.validateName(dns.RRToType(q), q.Header().Name) {
+	if len(msg.Question) != 1 || !m.validateName(t, dns.RRToType(q), q.Header().Name) {
 		return false
 	}
 	if len(msg.Answer) == 0 {
 		return true
 	}
-	return m.answersValid(msg)
+	return m.answersValid(t, msg)
 }
 
 // answersValid mirrors validateDNSAnswers, INCLUDING the in-order
 // allowedTargets accumulation. This is the heart of the chaining property.
-func (m *model) answersValid(msg *dns.Msg) bool {
+func (m *model) answersValid(t *rapid.T, msg *dns.Msg) bool {
 	var accumulated []string // normalized targets allowed by earlier RRs
 
 	for _, a := range msg.Answer {
@@ -255,35 +272,39 @@ func (m *model) answersValid(msg *dns.Msg) bool {
 		// otherwise it must be allowed as a question/owner name (with the
 		// same qtype-driven prefix rules the question uses).
 		if !slices.Contains(accumulated, owner) {
-			if !m.validateName(dns.RRToType(a), a.Header().Name) {
+			if !m.validateName(t, dns.RRToType(a), a.Header().Name) {
 				return false
 			}
 		}
 
 		target, targetBearing, supported := rrTarget(a)
 		if !supported {
+			t.Log("disallowed RR type")
 			return false // disallowed RR type (TXT, unknown, ...) -> drop reply
 		}
 		if !targetBearing {
 			switch ans := a.(type) {
 			case *dns.A:
 				if err := m.addrChecker.SafeAddr(ans.Addr); err != nil {
+					t.Log("disallowed A IP")
 					return false
 				}
 			case *dns.AAAA:
 				if err := m.addrChecker.SafeAddr(ans.Addr); err != nil {
+					t.Log("disallowed AAAA IP")
 					return false
 				}
 			}
 			continue // A/AAAA: no target to validate
 		}
 		if target == "" {
+			t.Log("empty target")
 			return false // malformed zero-rdlength target -> drop reply
 		}
 		if target == "." {
 			continue // legal "no endpoint" -> skip, no accumulation
 		}
-		if !m.targetAllowed(target) {
+		if !m.targetAllowed(t, target) {
 			return false
 		}
 		accumulated = append(accumulated, norm(target))
