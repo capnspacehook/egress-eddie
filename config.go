@@ -445,6 +445,8 @@ func checkPattern(pattern string) error {
 					return fmt.Errorf("pattern contains illegal character %c", r)
 				}
 			}
+		default:
+			// ignore other token types
 		}
 	}
 }

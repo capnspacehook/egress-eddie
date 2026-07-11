@@ -118,11 +118,17 @@ allowedTargets = [
 		err = makeHTTPReqs(client4, client6, "https://blog.github.com")
 		is.True(reqFailed(err)) // test subdomain matching works correctly
 
-		_, err = client4.Get("https://1.1.1.1")
+		resp, err := client4.Get("https://1.1.1.1")
 		is.True(reqFailed(err)) // request to IPv4 IP of disallowed domain should fail
+		if resp != nil {
+			resp.Body.Close()
+		}
 		if *enableIPv6 {
-			_, err = client6.Get("https://[2606:4700:4700::1111]")
+			resp, err := client6.Get("https://[2606:4700:4700::1111]")
 			is.True(reqFailed(err)) // request to IPv6 IP of disallowed domain should fail
+			if resp != nil {
+				resp.Body.Close()
+			}
 		}
 	})
 
@@ -158,11 +164,17 @@ allowedTargets = [
 
 		time.Sleep(4 * time.Second) // wait until IPs should expire
 
-		_, err = client4.Get("https://" + addrs4[0].Unmap().String())
+		resp, err := client4.Get("https://" + addrs4[0].Unmap().String())
 		is.True(reqFailed(err)) // request to expired IPv4 IP should fail
+		if resp != nil {
+			resp.Body.Close()
+		}
 		if *enableIPv6 {
-			_, err = client6.Get("https://[" + addrs6[0].Unmap().String() + "]")
+			resp, err := client6.Get("https://[" + addrs6[0].Unmap().String() + "]")
 			is.True(reqFailed(err)) // request to expired IPv6 IP should fail
+			if resp != nil {
+				resp.Body.Close()
+			}
 		}
 	})
 }
@@ -318,7 +330,9 @@ cachedTargets = [
 
 				resp, err := client4.Get("http://" + addr.String())
 				is.NoErr(err) // request to IP of cached domain should succeed
-				resp.Body.Close()
+				if resp != nil {
+					resp.Body.Close()
+				}
 			}
 
 			addrs, errs = resolve.Domain(getTimeout(t), "microsoft.com", sender, nil)
