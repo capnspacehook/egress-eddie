@@ -457,7 +457,7 @@ func (f *filter) close() {
 // to use the self-filter to check DoH responses.
 // TODO: possible to scope matchers per filter?
 func (f *filter) validateDNSResponse(reqMsg, respMsg *dns.Msg) error {
-	ri, err := newRequestInfo(reqMsg)
+	ri, err := types.NewRequestInfo(reqMsg)
 	if err != nil {
 		return err
 	}
@@ -562,16 +562,37 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 
 func (f *filter) handleDoHRequests(ctx context.Context, logger *zap.Logger, numWorkers int) {
 	logger = logger.With(zap.String(componentKey, "doh-proxy"))
+	sender := resolve.NewSingleFlightSender(f.sender)
 
 	for range numWorkers {
 		f.wg.Go(func() {
 			for r := range f.dohQueries {
 				logger.Info("forwarding DNS request over DoH", dnsFields(r.reqMsg, f.fullDNSLogging)...)
-				respMsg, err := f.proxyDoH(ctx, r.reqMsg, r.ri)
+				respMsg, err := sender.SendRequest(ctx, r.reqMsg)
 				if err != nil {
 					logger.Error("forwarding DoH request", zap.Error(err))
 					continue
 				}
+				// dnshttp.NewRequest sets the message ID to zero, so we need to
+				// set it back
+				respMsg.ID = r.ri.ID
+
+				// confirm that the request and response question matches
+				if err := f.compareDNSReqResp(r.ri, respMsg); err != nil {
+					logger.Error("checking response against request", zap.Error(err))
+					continue
+				}
+
+				// allow DNS response if there are no answers
+				if len(respMsg.Answer) != 0 {
+					// validate all DNS answer owner names before adding any
+					// IPs or domains any allowed lists
+					if err := f.validateDNSAnswers(respMsg); err != nil {
+						logger.Error("validating DNS response answers", zap.Error(err))
+						continue
+					}
+				}
+
 				f.handleAnswers(respMsg)
 
 				logger.Info("injecting DNS response from DoH", dnsFields(respMsg, f.fullDNSLogging)...)
@@ -693,34 +714,6 @@ func newDNSRequestCallback(f *filter) hookCreator {
 	}
 }
 
-// proxyDoH forwards a DNS request over DoH, verifies the response and
-// returns it if it's allowed.
-func (f *filter) proxyDoH(ctx context.Context, reqMsg *dns.Msg, ri types.RequestInfo) (*dns.Msg, error) {
-	respMsg, err := f.sender.SendRequest(ctx, reqMsg)
-	if err != nil {
-		return nil, fmt.Errorf("forwarding DoH request: %w", err)
-	}
-	// dnshttp.NewRequest sets the message ID to zero, so we need to
-	// set it back
-	respMsg.ID = ri.ID
-
-	// confirm that the request and response question matches
-	if err := f.compareDNSReqResp(ri, respMsg); err != nil {
-		return nil, fmt.Errorf("checking response against request: %w", err)
-	}
-
-	// allow DNS response if there are no answers
-	if len(respMsg.Answer) != 0 {
-		// validate all DNS answer owner names before adding any
-		// IPs or domains any allowed lists
-		if err := f.validateDNSAnswers(respMsg); err != nil {
-			return nil, fmt.Errorf("validating DNS response answers: %w", err)
-		}
-	}
-
-	return respMsg, nil
-}
-
 func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, types.ConnectionID, error) {
 	payload, connID, err := parseLayer4Packet(packet, true, ipv6, inbound)
 	if err != nil {
@@ -824,7 +817,7 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (types.RequestInfo, error)
 		return types.RequestInfo{}, fmt.Errorf("%d questions in DNS request, expected 1", len(dnsMsg.Question))
 	}
 
-	ri, err := newRequestInfo(dnsMsg)
+	ri, err := types.NewRequestInfo(dnsMsg)
 	if err != nil {
 		return types.RequestInfo{}, err
 	}

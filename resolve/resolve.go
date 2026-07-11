@@ -8,16 +8,20 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsconf"
 	"codeberg.org/miekg/dns/dnshttp"
+	"github.com/capnspacehook/singleflight-generic"
 	"github.com/florianl/go-nfqueue/v2"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
 	"golang.org/x/sys/unix"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 const (
@@ -122,6 +126,50 @@ func Domain(ctx context.Context, domain string, sender DNSSender, validateResp V
 	}
 
 	return addrs, lookupErrs
+}
+
+type singleFlightSender struct {
+	sf     *singleflight.Group[types.RequestInfo, *dns.Msg]
+	sender DNSSender
+}
+
+// NewSingleFlightSender returns a [DNSSender] that will ensure that
+// multiple calls with semantically equivalent requests only result in
+// a single send of the DNS request, given that the requests come in
+// while one is already in flight.
+func NewSingleFlightSender(sender DNSSender) DNSSender {
+	return &singleFlightSender{
+		sf:     new(singleflight.Group[types.RequestInfo, *dns.Msg]),
+		sender: sender,
+	}
+}
+
+func (s *singleFlightSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (dnsResp *dns.Msg, err error) {
+	ri, err := types.NewRequestInfo(dnsReq)
+	if err != nil {
+		return nil, err
+	}
+	// clear the ID and lowercase the name so semantically equivalent
+	// requests are grouped together
+	ri.ID = 0
+	ri.Name = strings.ToLower(ri.Name)
+
+	respMsg, err, _ := s.sf.Do(ri, func() (*dns.Msg, error) {
+		return s.sender.SendRequest(ctx, dnsReq)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return respMsg, nil
+}
+
+func (s *singleFlightSender) ResponsesValidated() bool {
+	return s.sender.ResponsesValidated()
+}
+
+func (s *singleFlightSender) TransportType() string {
+	return s.sender.TransportType()
 }
 
 type udpSender struct {
