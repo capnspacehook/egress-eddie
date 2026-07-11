@@ -67,6 +67,8 @@ allowedDomains = [
 	"foo",
 	"bar",
 	"baz.barf",
+	"*.domain.org",
+	"num[2-7].bers.lab",
 ]`)
 
 	config, err := parseConfigBytes(cb)
@@ -90,6 +92,7 @@ allowedDomains = [
 	dnsQueues := []uint16{
 		config.Filters[0].DNSQueue,
 		config.DNSResponseQueue,
+		config.Filters[0].TrafficQueue,
 	}
 
 	packetID := uint32(1)
@@ -110,8 +113,8 @@ allowedDomains = [
 				Payload:    new(packet),
 			})
 
-			// DNS request filter should never add IPs or domains
-			if i == 0 {
+			// only DNS response filter should add IPs or domains
+			if i != 1 {
 				if filters.filters[0].allowedIPs.Len() > allowedIPsLen {
 					t.Errorf("queue %d added an IP", queue)
 				}
