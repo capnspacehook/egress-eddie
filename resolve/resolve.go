@@ -154,14 +154,17 @@ func (s *singleFlightSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (
 	ri.ID = 0
 	ri.Name = strings.ToLower(ri.Name)
 
-	respMsg, err, _ := s.sf.Do(ri, func() (*dns.Msg, error) {
+	respMsg, err, shared := s.sf.Do(ri, func() (*dns.Msg, error) {
 		return s.sender.SendRequest(ctx, dnsReq)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return respMsg, nil
+	if !shared {
+		return respMsg, nil
+	}
+	return respMsg.Copy(), nil
 }
 
 func (s *singleFlightSender) ResponsesValidated() bool {
@@ -269,11 +272,11 @@ func (d *dohSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (*dns.Msg,
 	if err != nil {
 		return nil, fmt.Errorf("sending DoH request: %w", err)
 	}
+	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("DoH request failed with status code %d", httpResp.StatusCode)
 	}
-	defer httpResp.Body.Close()
 
 	dnsResp, err := dnshttp.Response(httpResp)
 	if err != nil {
