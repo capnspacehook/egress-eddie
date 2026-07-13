@@ -13,12 +13,11 @@ import (
 	"code.dny.dev/ssrf"
 	"codeberg.org/miekg/dns"
 	"github.com/florianl/go-nfqueue/v2"
-	"github.com/gopacket/gopacket"
-	"github.com/gopacket/gopacket/layers"
 	"github.com/mdlayher/netlink"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
+	"github.com/capnspacehook/egress-eddie/packet"
 	"github.com/capnspacehook/egress-eddie/resolve"
 	"github.com/capnspacehook/egress-eddie/timedcache"
 	"github.com/capnspacehook/egress-eddie/types"
@@ -62,7 +61,7 @@ type FilterManager struct {
 	fullDNSLogging bool
 	logger         *zap.Logger
 
-	queueNum uint16
+	decoder packet.Decoder
 
 	injector resolve.DNSInjector
 
@@ -87,6 +86,8 @@ type filter struct {
 
 	dnsReqNF  enforcer
 	genericNF enforcer
+
+	decoder packet.Decoder
 
 	addrChecker *ssrf.Guardian
 
@@ -168,7 +169,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		permissiveMode: permissiveMode,
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
-		queueNum:       config.DNSResponseQueue,
+		decoder:        packet.NewDecoder(),
 		filters:        make([]*filter, len(config.Filters)),
 	}
 
@@ -296,6 +297,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		permissiveMode:  permissiveMode,
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
+		decoder:         packet.NewDecoder(),
 		sender:          sender,
 		injector:        injector,
 		connections:     timedcache.New[types.ConnectionID, types.RequestInfo](logger, true),
@@ -647,7 +649,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			reqMsg, connID, err := parseDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
+			reqMsg, connID, err := f.decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if reqMsg != nil {
@@ -714,102 +716,6 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 		return newHookFunc(logger, e, createCallback(logger), f.permissiveMode)
 	}
-}
-
-func parseDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, types.ConnectionID, error) {
-	payload, connID, err := parseLayer4Packet(packet, true, ipv6, inbound)
-	if err != nil {
-		return nil, types.ConnectionID{}, err
-	}
-
-	dnsMsg := dns.Msg{Data: payload}
-	if err := dnsMsg.Unpack(); err != nil {
-		return nil, types.ConnectionID{}, fmt.Errorf("decoding DNS message: %w", err)
-	}
-
-	return &dnsMsg, connID, nil
-}
-
-func parseLayer4Packet(packet []byte, expectUDP, ipv6, inbound bool) ([]byte, types.ConnectionID, error) {
-	var (
-		ip4     layers.IPv4
-		ip6     layers.IPv6
-		tcp     layers.TCP
-		udp     layers.UDP
-		parser  *gopacket.DecodingLayerParser
-		decoded = make([]gopacket.LayerType, 0, 2)
-	)
-
-	if !ipv6 {
-		if expectUDP {
-			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &udp)
-		} else {
-			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4, &ip4, &tcp, &udp)
-		}
-	} else {
-		if expectUDP {
-			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &udp)
-		} else {
-			parser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6, &ip6, &tcp, &udp)
-		}
-	}
-	// required because gopacket isn't parsing DNS packets
-	parser.IgnoreUnsupported = true
-
-	if err := parser.DecodeLayers(packet, &decoded); err != nil {
-		return nil, types.ConnectionID{}, fmt.Errorf("decoding packet: %w", err)
-	}
-	if len(decoded) != 2 {
-		return nil, types.ConnectionID{}, fmt.Errorf("%d layers were parsed, expecting 2", len(decoded))
-	}
-
-	lType := decoded[1]
-	if (expectUDP && lType != layers.LayerTypeUDP) || (lType != layers.LayerTypeUDP && lType != layers.LayerTypeTCP) {
-		return nil, types.ConnectionID{}, fmt.Errorf("unexpected layer type for second layer: %s", lType)
-	}
-
-	// build connection ID so dns requests/responses can be correlated
-	var (
-		src, dst     netip.Addr
-		srcOK, dstOK bool
-	)
-
-	switch decoded[0] {
-	case layers.LayerTypeIPv4:
-		src, srcOK = netip.AddrFromSlice(ip4.SrcIP)
-		dst, dstOK = netip.AddrFromSlice(ip4.DstIP)
-	case layers.LayerTypeIPv6:
-		src, srcOK = netip.AddrFromSlice(ip6.SrcIP)
-		dst, dstOK = netip.AddrFromSlice(ip6.DstIP)
-	default:
-		return nil, types.ConnectionID{}, fmt.Errorf("unknown IP protocol %s", decoded[0])
-	}
-	if !srcOK || !dstOK {
-		return nil, types.ConnectionID{}, errors.New("converting IPs")
-	}
-
-	var srcPort, dstPort uint16
-	var payload []byte
-	if lType == layers.LayerTypeUDP {
-		srcPort = uint16(udp.SrcPort)
-		dstPort = uint16(udp.DstPort)
-		payload = udp.Payload
-	} else {
-		srcPort = uint16(tcp.SrcPort)
-		dstPort = uint16(tcp.DstPort)
-		payload = tcp.Payload
-	}
-
-	connID := types.ConnectionID{}
-	if inbound {
-		connID.Src = netip.AddrPortFrom(dst, dstPort)
-		connID.Dst = netip.AddrPortFrom(src, srcPort)
-	} else {
-		connID.Src = netip.AddrPortFrom(src, srcPort)
-		connID.Dst = netip.AddrPortFrom(dst, dstPort)
-	}
-
-	return payload, connID, nil
 }
 
 func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (types.RequestInfo, error) {
@@ -1163,7 +1069,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return dropVerdict
 			}
 
-			respMsg, connID, err := parseDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, true)
+			respMsg, connID, err := f.decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, true)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if respMsg != nil {
@@ -1274,7 +1180,7 @@ func newGenericCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			_, connID, err := parseLayer4Packet(*attr.Payload, false, *attr.HwProtocol == unix.ETH_P_IPV6, false)
+			connID, err := f.decoder.DecodePacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
 			if err != nil {
 				logger.Error("parsing packet", zap.Error(err))
 				return dropVerdict
@@ -1282,11 +1188,11 @@ func newGenericCallback(f *filter) hookCreator {
 
 			// validate that the destination IP is allowed
 			if f.allowedIPs.Exists(connID.Dst.Addr()) {
-				logger.Info("allowing packet", zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
+				logger.Info("allowing packet", zap.Stringer("conn.src", connID.Src.Addr()), zap.Stringer("conn.dst", connID.Dst.Addr()))
 				return acceptVerdict
 			}
 
-			logger.Info("dropping packet", zap.Stringer("conn.src", connID.Src), zap.Stringer("conn.dst", connID.Dst))
+			logger.Info("dropping packet", zap.Stringer("conn.src", connID.Src.Addr()), zap.Stringer("conn.dst", connID.Dst.Addr()))
 			return dropVerdict
 		}
 	}

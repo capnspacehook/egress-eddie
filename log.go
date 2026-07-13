@@ -2,8 +2,6 @@ package egresseddie
 
 import (
 	"errors"
-	"strconv"
-	"strings"
 
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/deleg"
@@ -95,8 +93,8 @@ func (q dnsQuestion) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	}
 
 	enc.AddString("name", h.Name)
-	enc.AddString("class", strings.ToLower(qClassToString(h.Class)))
-	enc.AddString("type", strings.ToLower(rrTypeToString(dns.RRToType(q.RR))))
+	enc.AddString("class", qClassToString(h.Class))
+	enc.AddString("type", rrTypeToString(dns.RRToType(q.RR)))
 	return nil
 }
 
@@ -135,7 +133,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddString("hostname", rr.Hostname)
 	case *dns.ANY:
 	case *dns.AVC:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.AXFR:
@@ -159,7 +157,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint8("algorithm", rr.Algorithm)
 		enc.AddString("certificate", rr.Certificate)
 	case *dns.CLA:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.CNAME:
@@ -292,7 +290,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	case *dns.NIMLOC:
 		enc.AddString("locator", rr.Locator)
 	case *dns.NINFO:
-		if err := enc.AddArray("zs-data", dnsTXTs(rr.ZSData)); err != nil {
+		if err := enc.AddArray("zs-data", dnsStrings(rr.ZSData)); err != nil {
 			return err
 		}
 	case *dns.NS:
@@ -338,7 +336,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddString("map822", rr.Map822)
 		enc.AddString("mapx400", rr.Mapx400)
 	case *dns.RESINFO:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.RFC3597:
@@ -388,7 +386,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint32("expire", rr.Expire)
 		enc.AddUint32("min", rr.Minttl)
 	case *dns.SPF:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.SRV:
@@ -440,7 +438,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("other-len", rr.OtherLen)
 		enc.AddString("other-data", rr.OtherData)
 	case *dns.TXT:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.UID:
@@ -452,7 +450,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddUint16("weight", rr.Weight)
 		enc.AddString("name", rr.Target)
 	case *dns.WALLET:
-		if err := enc.AddArray("data", dnsTXTs(rr.Txt)); err != nil {
+		if err := enc.AddArray("data", dnsStrings(rr.Txt)); err != nil {
 			return err
 		}
 	case *dns.X25:
@@ -464,7 +462,7 @@ func (r dnsRecord) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 		enc.AddString("digest", rr.Digest)
 	}
 
-	enc.AddString("type", strings.ToLower(rrTypeToString(dns.RRToType(r.RR))))
+	enc.AddString("type", rrTypeToString(dns.RRToType(r.RR)))
 
 	return nil
 }
@@ -490,17 +488,10 @@ func (o dnsOpt) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	if opt, ok := o.RR.(dns.EDNS0); ok {
 		code = dns.RRToCode(opt)
 	}
-	enc.AddString("code", strings.ToLower(ednsCodeToString(code)))
+	enc.AddString("code", ednsCodeToString(code))
 	enc.AddString("data", o.String())
 
 	return nil
-}
-
-func ednsCodeToString(code uint16) string {
-	if codeName, ok := dns.CodeToString[code]; ok {
-		return codeName
-	}
-	return "unknown-" + strconv.Itoa(int(code))
 }
 
 type dnsStrings []string
@@ -559,23 +550,13 @@ func (v dnsDelegValue) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	return nil
 }
 
-type dnsTXTs []string
-
-func (t dnsTXTs) MarshalLogArray(enc zapcore.ArrayEncoder) error {
-	for i := range t {
-		enc.AppendString(t[i])
-	}
-
-	return nil
-}
-
 // dnsTypeBitMap logs the record types in an NSEC-style type bit map by
 // their string representations.
 type dnsTypeBitMap []uint16
 
 func (t dnsTypeBitMap) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	for i := range t {
-		enc.AppendString(strings.ToLower(rrTypeToString(t[i])))
+		enc.AppendString(rrTypeToString(t[i]))
 	}
 
 	return nil

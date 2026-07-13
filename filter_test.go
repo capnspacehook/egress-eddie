@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"pgregory.net/rapid"
 
+	"github.com/capnspacehook/egress-eddie/packet"
 	"github.com/capnspacehook/egress-eddie/timedcache"
 )
 
@@ -175,7 +176,9 @@ func testConnectionID(t *rapid.T) {
 		t.Skip()
 	}
 
-	_, connID, err := parseDNSPacket(buf.Bytes(), ipv6, true)
+	dec := packet.NewDecoder()
+
+	_, connID, err := dec.DecodeDNSPacket(buf.Bytes(), ipv6, true)
 	if err != nil {
 		t.Skip()
 	}
@@ -206,7 +209,7 @@ func testConnectionID(t *rapid.T) {
 		t.Skip()
 	}
 
-	_, connID2, err := parseDNSPacket(buf.Bytes(), ipv6, false)
+	_, connID2, err := dec.DecodeDNSPacket(buf.Bytes(), ipv6, false)
 	if err != nil {
 		t.Skip()
 	}

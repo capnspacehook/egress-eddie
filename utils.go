@@ -10,6 +10,27 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	lowerClassStrings    map[uint16]string
+	lowerTypeStrings     map[uint16]string
+	lowerEDNSCodeStrings map[uint16]string
+)
+
+func init() {
+	lowerClassStrings = make(map[uint16]string, len(dns.ClassToString))
+	for k, v := range dns.ClassToString {
+		lowerClassStrings[k] = strings.ToLower(v)
+	}
+	lowerTypeStrings = make(map[uint16]string, len(dns.TypeToString))
+	for k, v := range dns.TypeToString {
+		lowerTypeStrings[k] = strings.ToLower(v)
+	}
+	lowerEDNSCodeStrings = make(map[uint16]string, len(dns.CodeToString))
+	for k, v := range dns.CodeToString {
+		lowerEDNSCodeStrings[k] = strings.ToLower(v)
+	}
+}
+
 func connIsEstablished(state uint32) bool {
 	return state == stateEstablished || state == stateRelated || state == stateEstablishedReply || state == stateRelatedReply
 }
@@ -76,19 +97,26 @@ func prepareDomainName(domain string) string {
 }
 
 func qClassToString(qClass uint16) string {
-	className, ok := dns.ClassToString[qClass]
+	className, ok := lowerClassStrings[qClass]
 	if ok {
 		return className
 	}
-	return "unknown-" + strconv.Itoa(int(qClass))
+	return "class" + strconv.Itoa(int(qClass))
 }
 
 func rrTypeToString(rrType uint16) string {
-	typeName, ok := dns.TypeToString[rrType]
+	typeName, ok := lowerTypeStrings[rrType]
 	if ok {
 		return typeName
 	}
-	return "unknown-" + strconv.Itoa(int(rrType))
+	return "type" + strconv.Itoa(int(rrType))
+}
+
+func ednsCodeToString(code uint16) string {
+	if codeName, ok := lowerEDNSCodeStrings[code]; ok {
+		return codeName
+	}
+	return "code" + strconv.Itoa(int(code))
 }
 
 func (f *filter) dropReasonFields(reason error, dnsMsg *dns.Msg) []zap.Field {
