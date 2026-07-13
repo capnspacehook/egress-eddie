@@ -52,6 +52,10 @@ func TestSingleFlightSenderRace(t *testing.T) {
 					return
 				}
 
+				if resp.ID != req.ID {
+					t.Errorf("response ID mismatch: want %d got %d", req.ID, resp.ID)
+				}
+
 				err = resp.Pack()
 				if err != nil {
 					t.Errorf("packing response: %v", err)

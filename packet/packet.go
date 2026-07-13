@@ -6,12 +6,13 @@ import (
 	"net/netip"
 
 	"codeberg.org/miekg/dns"
-	"github.com/capnspacehook/egress-eddie/types"
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
-type Decoder struct {
+type decoder struct {
 	ip4 *layers.IPv4
 	ip6 *layers.IPv6
 	udp *layers.UDP
@@ -24,56 +25,77 @@ type Decoder struct {
 	decoded []gopacket.LayerType
 }
 
-func NewDecoder() Decoder {
-	d := Decoder{
-		ip4:     new(layers.IPv4),
-		ip6:     new(layers.IPv6),
-		udp:     new(layers.UDP),
-		decoded: make([]gopacket.LayerType, 0, 2),
+type DNSPacketDecoder interface {
+	DecodeDNSPacket(packet []byte, ipv6, inbound bool) (*dns.Msg, types.ConnectionID, error)
+}
+
+type IPPacketDecoder interface {
+	DecodeIPPacket(packet []byte, ipv6, inbound bool) (types.ConnectionID, error)
+}
+
+func NewDNSDecoder() DNSPacketDecoder {
+	return newDecoder(true)
+}
+
+func NewIPDecoder() IPPacketDecoder {
+	return newDecoder(false)
+}
+
+func newDecoder(dns bool) *decoder {
+	d := decoder{
+		ip4: new(layers.IPv4),
+		ip6: new(layers.IPv6),
 	}
 
 	// create and reuse the parsers to avoid allocating one for each
 	// packet; DNS parsers need to have IgnoreUnsupported set because
 	// gopacket isn't parsing DNS, generic parsers need it set so they
 	// don't error out when trying to parse above layer 3
-	d.ipv4DNSParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
-	d.ipv4DNSParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
-	d.ipv4DNSParser.AddDecodingLayer(d.ip4)
-	d.ipv4DNSParser.AddDecodingLayer(d.udp)
-	d.ipv4DNSParser.IgnoreUnsupported = true
+	if dns {
+		d.udp = new(layers.UDP)
+		d.decoded = make([]gopacket.LayerType, 0, 2)
 
-	d.ipv4GenericParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
-	d.ipv4GenericParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
-	d.ipv4GenericParser.AddDecodingLayer(d.ip4)
-	d.ipv4GenericParser.IgnoreUnsupported = true
+		d.ipv4DNSParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
+		d.ipv4DNSParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
+		d.ipv4DNSParser.AddDecodingLayer(d.ip4)
+		d.ipv4DNSParser.AddDecodingLayer(d.udp)
+		d.ipv4DNSParser.IgnoreUnsupported = true
 
-	d.ipv6DNSParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6)
-	d.ipv6DNSParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
-	d.ipv6DNSParser.AddDecodingLayer(d.ip6)
-	d.ipv6DNSParser.AddDecodingLayer(d.udp)
-	d.ipv6DNSParser.IgnoreUnsupported = true
+		d.ipv6DNSParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6)
+		d.ipv6DNSParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
+		d.ipv6DNSParser.AddDecodingLayer(d.ip6)
+		d.ipv6DNSParser.AddDecodingLayer(d.udp)
+		d.ipv6DNSParser.IgnoreUnsupported = true
+	} else {
+		d.decoded = make([]gopacket.LayerType, 0, 1)
 
-	d.ipv6GenericParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6)
-	d.ipv6GenericParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
-	d.ipv6GenericParser.AddDecodingLayer(d.ip6)
-	d.ipv6GenericParser.IgnoreUnsupported = true
+		d.ipv4GenericParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv4)
+		d.ipv4GenericParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
+		d.ipv4GenericParser.AddDecodingLayer(d.ip4)
+		d.ipv4GenericParser.IgnoreUnsupported = true
 
-	return d
+		d.ipv6GenericParser = gopacket.NewDecodingLayerParser(layers.LayerTypeIPv6)
+		d.ipv6GenericParser.SetDecodingLayerContainer(gopacket.DecodingLayerSparse(nil))
+		d.ipv6GenericParser.AddDecodingLayer(d.ip6)
+		d.ipv6GenericParser.IgnoreUnsupported = true
+	}
+
+	return &d
 }
 
-func (d *Decoder) clearIPv4() {
+func (d *decoder) clearIPv4() {
 	*d.ip4 = layers.IPv4{}
 }
 
-func (d *Decoder) clearIPv6() {
+func (d *decoder) clearIPv6() {
 	*d.ip6 = layers.IPv6{}
 }
 
-func (d *Decoder) clearUDP() {
+func (d *decoder) clearUDP() {
 	*d.udp = layers.UDP{}
 }
 
-func (d *Decoder) DecodeDNSPacket(packet []byte, ipv6, inbound bool) (_ *dns.Msg, connID types.ConnectionID, err error) {
+func (d *decoder) DecodeDNSPacket(packet []byte, ipv6, inbound bool) (_ *dns.Msg, connID types.ConnectionID, err error) {
 	d.clearUDP()
 
 	var payload []byte
@@ -96,7 +118,7 @@ func (d *Decoder) DecodeDNSPacket(packet []byte, ipv6, inbound bool) (_ *dns.Msg
 	return &dnsMsg, connID, nil
 }
 
-func (d *Decoder) DecodePacket(packet []byte, ipv6, inbound bool) (types.ConnectionID, error) {
+func (d *decoder) DecodeIPPacket(packet []byte, ipv6, inbound bool) (types.ConnectionID, error) {
 	if ipv6 {
 		d.clearIPv6()
 		_, connID, err := d.decodePacket(d.ipv6GenericParser, packet, 1, inbound)
@@ -108,7 +130,7 @@ func (d *Decoder) DecodePacket(packet []byte, ipv6, inbound bool) (types.Connect
 	return connID, err
 }
 
-func (d *Decoder) decodePacket(parser *gopacket.DecodingLayerParser, packet []byte, expectedLayers int, inbound bool) ([]byte, types.ConnectionID, error) {
+func (d *decoder) decodePacket(parser *gopacket.DecodingLayerParser, packet []byte, expectedLayers int, inbound bool) ([]byte, types.ConnectionID, error) {
 	if err := parser.DecodeLayers(packet, &d.decoded); err != nil {
 		return nil, types.ConnectionID{}, fmt.Errorf("decoding packet: %w", err)
 	}

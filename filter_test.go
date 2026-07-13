@@ -176,7 +176,7 @@ func testConnectionID(t *rapid.T) {
 		t.Skip()
 	}
 
-	dec := packet.NewDecoder()
+	dec := packet.NewDNSDecoder()
 
 	_, connID, err := dec.DecodeDNSPacket(buf.Bytes(), ipv6, true)
 	if err != nil {

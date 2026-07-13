@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"sync"
 
 	"codeberg.org/miekg/dns"
 	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 var mockEnforcers map[uint16]*mockEnforcer
@@ -96,7 +97,7 @@ type mockInjector struct {
 	count int
 }
 
-func (m *mockInjector) InjectResponse(_ *dns.Msg, _, _ netip.AddrPort, _ nfqueue.Attribute) error {
+func (m *mockInjector) InjectResponse(_ *dns.Msg, _ types.ConnectionID, _ nfqueue.Attribute) error {
 	m.count++
 	return nil
 }

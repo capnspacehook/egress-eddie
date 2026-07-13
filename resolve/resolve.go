@@ -167,7 +167,13 @@ func (s *singleFlightSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (
 	if !shared {
 		return respMsg, nil
 	}
-	return respMsg.Copy(), nil
+
+	// copy the response message to avoid callers causing races and
+	// set the ID to match the request
+	respCopy := respMsg.Copy()
+	respCopy.ID = dnsReq.ID
+
+	return respCopy, nil
 }
 
 func (s *singleFlightSender) ResponsesValidated() bool {
@@ -270,7 +276,7 @@ func NewDoHSender(resolverURL, serverName string) (DNSSender, error) {
 			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 				addr := net.TCPAddr{
 					IP:   ip.AsSlice(),
-					Port: int(port),
+					Port: port,
 					Zone: ip.Zone(),
 				}
 				return net.DialTCP("tcp", nil, &addr)
@@ -341,7 +347,7 @@ func (d *dohSender) TransportType() string {
 type DNSInjector interface {
 	// InjectResponse crafts and sends a UDP packet containing dnsResp to the
 	// client identified by srcAddr, appearing to come from dstAddr.
-	InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error
+	InjectResponse(dnsResp *dns.Msg, connID types.ConnectionID, attr nfqueue.Attribute) error
 	Close() error
 }
 
@@ -349,8 +355,7 @@ type rawInjector struct {
 	mtx    sync.RWMutex
 	closed bool
 
-	loIface net.Interface
-	ifaces  map[int]net.Interface
+	loIface *net.Interface
 	socket  int
 }
 
@@ -367,14 +372,17 @@ func NewDNSInjector() (DNSInjector, error) {
 	if len(ifaces) == 0 {
 		return nil, errors.New("no network interfaces found")
 	}
-	ifaceIdxes := make(map[int]net.Interface, len(ifaces))
+
+	var loIface *net.Interface
 	for _, iface := range ifaces {
-		ifaceIdxes[iface.Index] = iface
+		if iface.Flags&net.FlagLoopback != 0 {
+			loIface = &iface
+			break
+		}
 	}
 
 	return &rawInjector{
-		loIface: ifaces[0],
-		ifaces:  ifaceIdxes,
+		loIface: loIface,
 		socket:  sock,
 	}, nil
 }
@@ -393,7 +401,7 @@ type netPacket interface {
 	gopacket.NetworkLayer
 }
 
-func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error {
+func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, connID types.ConnectionID, attr nfqueue.Attribute) error {
 	d.mtx.RLock()
 	defer d.mtx.RUnlock()
 
@@ -414,9 +422,9 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 			ifaceIDx = int(*attr.InDev)
 		}
 
-		iface, ok := d.ifaces[ifaceIDx]
-		if !ok {
-			return fmt.Errorf("no network interface found for index %d", ifaceIDx)
+		iface, err := net.InterfaceByIndex(ifaceIDx)
+		if err != nil {
+			return fmt.Errorf("looking up interface: %w", err)
 		}
 
 		srcMAC = iface.HardwareAddr
@@ -437,14 +445,14 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 	}
 
 	var ipLayer netPacket
-	if srcAddr.Addr().Is6() {
+	if connID.Src.Addr().Is6() {
 		ethLayer.EthernetType = layers.EthernetTypeIPv6
 		ipLayer = &layers.IPv6{
 			Version:    6,
 			HopLimit:   64,
 			NextHeader: layers.IPProtocolUDP,
-			SrcIP:      dstAddr.Addr().AsSlice(),
-			DstIP:      srcAddr.Addr().AsSlice(),
+			SrcIP:      connID.Dst.Addr().AsSlice(),
+			DstIP:      connID.Src.Addr().AsSlice(),
 		}
 	} else {
 		ethLayer.EthernetType = layers.EthernetTypeIPv4
@@ -452,13 +460,13 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 			Version:  4,
 			TTL:      64,
 			Protocol: layers.IPProtocolUDP,
-			SrcIP:    dstAddr.Addr().AsSlice(),
-			DstIP:    srcAddr.Addr().AsSlice(),
+			SrcIP:    connID.Dst.Addr().AsSlice(),
+			DstIP:    connID.Src.Addr().AsSlice(),
 		}
 	}
 	udpLayer := &layers.UDP{
-		SrcPort: layers.UDPPort(dstAddr.Port()),
-		DstPort: layers.UDPPort(srcAddr.Port()),
+		SrcPort: layers.UDPPort(connID.Dst.Port()),
+		DstPort: layers.UDPPort(connID.Src.Port()),
 	}
 	if err := udpLayer.SetNetworkLayerForChecksum(ipLayer); err != nil {
 		return fmt.Errorf("setting UDP checksum layer: %w", err)

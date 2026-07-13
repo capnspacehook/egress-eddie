@@ -62,8 +62,6 @@ type FilterManager struct {
 	fullDNSLogging bool
 	logger         *zap.Logger
 
-	decoder packet.Decoder
-
 	injector resolve.DNSInjector
 
 	dnsRespNF enforcer
@@ -87,8 +85,6 @@ type filter struct {
 
 	dnsReqNF  enforcer
 	genericNF enforcer
-
-	decoder packet.Decoder
 
 	addrChecker *ssrf.Guardian
 
@@ -170,7 +166,6 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		permissiveMode: permissiveMode,
 		fullDNSLogging: fullDNSLogging,
 		logger:         logger,
-		decoder:        packet.NewDecoder(),
 		filters:        make([]*filter, len(config.Filters)),
 	}
 
@@ -302,7 +297,6 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 		permissiveMode:  permissiveMode,
 		fullDNSLogging:  fullDNSLogging,
 		logger:          filterLogger,
-		decoder:         packet.NewDecoder(),
 		sender:          sender,
 		injector:        injector,
 		connections:     timedcache.New[types.ConnectionID, types.RequestInfo](logger, true),
@@ -591,7 +585,7 @@ func (f *filter) startDoHRequestHandlers(ctx context.Context, logger *zap.Logger
 				f.handleAnswers(respMsg)
 
 				logger.Info("injecting DNS response from DoH", dnsFields(respMsg, f.fullDNSLogging)...)
-				if err := f.injector.InjectResponse(respMsg, r.connID.Src, r.connID.Dst, r.attr); err != nil {
+				if err := f.injector.InjectResponse(respMsg, r.connID, r.attr); err != nil {
 					logger.Error("injecting DNS response", zap.Error(err))
 					continue
 				}
@@ -601,6 +595,7 @@ func (f *filter) startDoHRequestHandlers(ctx context.Context, logger *zap.Logger
 }
 
 func newDNSRequestCallback(f *filter) hookCreator {
+	decoder := packet.NewDNSDecoder()
 	var dohSendTimer *time.Timer
 	if f.dohQueries != nil {
 		dohSendTimer = time.NewTimer(dohSendTimeout)
@@ -644,7 +639,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			reqMsg, connID, err := f.decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
+			reqMsg, connID, err := decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if reqMsg != nil {
@@ -1055,6 +1050,8 @@ func newHookFunc(logger *zap.Logger, e enforcer, callback packetCallback, permis
 }
 
 func newDNSResponseCallback(f *FilterManager) hookCreator {
+	decoder := packet.NewDNSDecoder()
+
 	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
@@ -1097,7 +1094,7 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 				return dropVerdict
 			}
 
-			respMsg, connID, err := f.decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, true)
+			respMsg, connID, err := decoder.DecodeDNSPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, true)
 			if err != nil {
 				fields := []zap.Field{zap.Error(err)}
 				if respMsg != nil {
@@ -1166,6 +1163,8 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 }
 
 func newGenericCallback(f *filter) hookCreator {
+	decoder := packet.NewIPDecoder()
+
 	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
@@ -1195,7 +1194,7 @@ func newGenericCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			connID, err := f.decoder.DecodePacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
+			connID, err := decoder.DecodeIPPacket(*attr.Payload, *attr.HwProtocol == unix.ETH_P_IPV6, false)
 			if err != nil {
 				logger.Error("parsing packet", zap.Error(err))
 				return dropVerdict
