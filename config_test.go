@@ -2,6 +2,7 @@ package egresseddie
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -989,6 +990,10 @@ func TestValidDomainName(t *testing.T) {
 			name:       "with trailing hyphen",
 			domainName: "sub-.domain.com",
 			err:        "label ends with a dash",
+		},
+		{
+			name:       "label max length",
+			domainName: strings.Repeat("a", 63) + ".domain.com",
 		},
 		{
 			name:       "too long",

@@ -423,6 +423,9 @@ func checkPattern(pattern string) error {
 	if pattern == "" {
 		return errors.New("pattern is empty")
 	}
+	if pattern[len(pattern)-1] == '.' {
+		return errors.New("pattern ends with a dot; fully qualified domain names are never given to glob matchers so this pattern will never match anything")
+	}
 
 	l := lexer.NewLexer(pattern)
 	for {
@@ -459,6 +462,9 @@ func validLowerDomainName(dn string) error {
 		return err
 	}
 
+	if dn[len(dn)-1] == '.' {
+		return errors.New("domain name ends with a dot; fully qualified domain names are not allowed")
+	}
 	if strings.ToLower(dn) != dn {
 		return errors.New("contains uppercase characters, only lowercase characters are allowed in patterns to allow for case-insensitive matching")
 	}
@@ -487,7 +493,7 @@ func validDomainName(dn string) error {
 		}
 
 		if r == '.' {
-			if labelLen > 63 {
+			if labelLen-1 > 63 {
 				return errors.New("label exceeds 63 characters")
 			} else if lastRune == '-' {
 				return errors.New("label ends with a dash")
