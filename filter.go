@@ -34,8 +34,9 @@ const (
 	stateUntracked        = 7
 
 	// TODO: make configurable?
-	numBufferedDoHRequests = 128
+	numBufferedDoHRequests = 1024
 	numDoHWorkers          = 4
+	dohSendTimeout         = time.Second
 
 	componentKey = "component"
 )
@@ -349,7 +350,7 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 
 		if f.injector != nil {
 			f.dohQueries = make(chan dohRequest, numBufferedDoHRequests)
-			f.handleDoHRequests(ctx, filterLogger, numDoHWorkers)
+			f.startDoHRequestHandlers(ctx, filterLogger, numDoHWorkers)
 		}
 	}
 
@@ -553,7 +554,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 	}
 }
 
-func (f *filter) handleDoHRequests(ctx context.Context, logger *zap.Logger, numWorkers int) {
+func (f *filter) startDoHRequestHandlers(ctx context.Context, logger *zap.Logger, numWorkers int) {
 	logger = logger.With(zap.String(componentKey, "doh-proxy"))
 	sender := resolve.NewSingleFlightSender(f.sender)
 
@@ -596,6 +597,11 @@ func (f *filter) handleDoHRequests(ctx context.Context, logger *zap.Logger, numW
 }
 
 func newDNSRequestCallback(f *filter) hookCreator {
+	var dohSendTimer *time.Timer
+	if f.dohQueries != nil {
+		dohSendTimer = time.NewTimer(dohSendTimeout)
+	}
+
 	createCallback := func(logger *zap.Logger) packetCallback {
 		return func(attr nfqueue.Attribute) verdict {
 			// wait until the filter manager is setup to prevent race conditions
@@ -665,11 +671,20 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 			// proxy requests over DoH if we're configured to
 			if f.dohQueries != nil {
-				f.dohQueries <- dohRequest{
+				req := dohRequest{
 					reqMsg: reqMsg,
 					ri:     ri,
 					connID: connID,
 					attr:   attr,
+				}
+
+				dohSendTimer.Reset(dohSendTimeout)
+				select {
+				case f.dohQueries <- req:
+				case <-dohSendTimer.C:
+					err := errors.New("DoH request send timeout; internal queue is full")
+					logger.Warn("dropping DNS request", f.dropReasonFields(err, reqMsg)...)
+					return dropVerdict
 				}
 
 				// If we are proxying the response over DoH, always drop
