@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -243,15 +245,46 @@ type dohSender struct {
 	client      *http.Client
 }
 
-func NewDoHSender(resolverURL, serverName string) DNSSender {
+func NewDoHSender(resolverURL, serverName string) (DNSSender, error) {
+	u, err := url.Parse(resolverURL)
+	if err != nil {
+		return nil, err
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	if err != nil {
+		return nil, err
+	}
+
+	port := 443
+	if portStr := u.Port(); portStr != "" {
+		p, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return nil, err
+		}
+		port = int(p)
+	}
+
 	c := http.Client{
 		Transport: &http.Transport{
-			ForceAttemptHTTP2: true,
+			// ensure the IP is dialed directly
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				addr := net.TCPAddr{
+					IP:   ip.AsSlice(),
+					Port: int(port),
+					Zone: ip.Zone(),
+				}
+				return net.DialTCP("tcp", nil, &addr)
+			},
 			TLSClientConfig: &tls.Config{
 				MinVersion: tls.VersionTLS12,
 				NextProtos: dnshttp.NextProtos,
 				ServerName: serverName,
 			},
+			ForceAttemptHTTP2: true,
+		},
+		// reject all redirects, DoH servers shouldn't do this
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("redirects are not allowed")
 		},
 		Timeout: DNSQueryTimeout,
 	}
@@ -259,7 +292,7 @@ func NewDoHSender(resolverURL, serverName string) DNSSender {
 	return &dohSender{
 		resolverURL: resolverURL,
 		client:      &c,
-	}
+	}, nil
 }
 
 func (d *dohSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (*dns.Msg, error) {

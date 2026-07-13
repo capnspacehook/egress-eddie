@@ -29,10 +29,9 @@ type Config struct {
 	SelfDNSQueue     uint16
 	ResolverIP       string
 	ResolveWithDoH   bool
-	// TODO: require an IP or resolve host before filters start?
-	DoHURL        string
-	DoHServerName string
-	Filters       []FilterOptions
+	DoHURL           string
+	DoHServerName    string
+	Filters          []FilterOptions
 
 	enforcerCreator enforcerCreator
 	sender          resolve.DNSSender
@@ -129,13 +128,16 @@ func checkConfig(config *Config) error {
 			return fmt.Errorf("parsing DoH URL %q: %w", config.DoHURL, err)
 		}
 		if dohURL.Scheme != "https" {
-			return fmt.Errorf(`DoH URL %q must use scheme "https"`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q does not use scheme "https"`, config.DoHURL)
 		}
 		if dohURL.Host == "" {
-			return fmt.Errorf(`DoH URL %q must have a host`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q does not have a host`, config.DoHURL)
+		}
+		if _, err := netip.ParseAddr(dohURL.Hostname()); err != nil {
+			return fmt.Errorf(`DoH URL %q must have a valid IP address as the hostname`, config.DoHURL)
 		}
 		if dohURL.Path != "" {
-			return fmt.Errorf(`DoH URL %q must not have a path`, config.DoHURL)
+			return fmt.Errorf(`DoH URL %q has a path`, config.DoHURL)
 		}
 	}
 

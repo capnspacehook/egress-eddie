@@ -188,7 +188,11 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 	f.injector = config.injector
 	if config.ResolveWithDoH {
 		if dnsSender == nil {
-			dnsSender = resolve.NewDoHSender(config.DoHURL, config.DoHServerName)
+			var err error
+			dnsSender, err = resolve.NewDoHSender(config.DoHURL, config.DoHServerName)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// if any filter will need to process incoming DNS traffic and
