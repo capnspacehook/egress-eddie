@@ -41,7 +41,7 @@ const (
 )
 
 // this must be kept up to date with the type switches in
-// validateDNSAnswers and newDNSResponseCallback
+// validateDNSAnswers and handleAnswers
 var allowedRRTypes = []uint16{
 	dns.TypeA,
 	dns.TypeAAAA,
@@ -228,7 +228,7 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		}
 		f.filters[0] = filter
 
-		validateResp = filter.validateDNSResponse
+		validateResp = newValidateResponseCallback(filter)
 		startIdx = 1
 	}
 
@@ -464,27 +464,15 @@ func (f *filter) close() {
 // This is really only useful for cacheDomains of various filters
 // to use the self-filter to check DoH responses.
 // TODO: possible to scope matchers per filter?
-func (f *filter) validateDNSResponse(reqMsg, respMsg *dns.Msg) error {
-	ri, err := types.NewRequestInfo(reqMsg)
-	if err != nil {
-		return err
-	}
-
-	// confirm that the request and response question matches
-	if err := f.compareDNSReqResp(ri, respMsg); err != nil {
-		return fmt.Errorf("checking response against request: %w", err)
-	}
-
-	// allow DNS response if there are no answers
-	if len(respMsg.Answer) != 0 {
-		// validate all DNS answer owner names before adding any
-		// IPs or domains any allowed lists
-		if err := f.validateDNSAnswers(respMsg); err != nil {
-			return fmt.Errorf("validating DNS response answers: %w", err)
+func newValidateResponseCallback(f *filter) resolve.ValidateRespCallback {
+	return func(reqMsg, respMsg *dns.Msg) error {
+		ri, err := types.NewRequestInfo(reqMsg)
+		if err != nil {
+			return err
 		}
-	}
 
-	return nil
+		return f.validateDNSResponse(ri, respMsg)
+	}
 }
 
 func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateResp resolve.ValidateRespCallback) {
@@ -498,10 +486,7 @@ func (f *filter) cacheDomains(ctx context.Context, logger *zap.Logger, validateR
 	}
 
 	if validateResp == nil {
-		if f.opts.Name != selfFilterName {
-			panic("validateResp must be set for non-self filters")
-		}
-		validateResp = f.validateDNSResponse
+		panic("validateResp is nil")
 	}
 
 	// TODO: rename to pre-lookup? pre-resolve?
@@ -672,7 +657,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 
 			// validate DNS request questions are for allowed
 			// domains, drop them otherwise
-			ri, err := f.validateDNSQuestion(reqMsg)
+			ri, err := f.validateDNSRequest(reqMsg)
 			if err != nil {
 				logger.Warn("dropping DNS request", f.dropReasonFields(err, reqMsg)...)
 				return dropVerdict
@@ -718,7 +703,7 @@ func newDNSRequestCallback(f *filter) hookCreator {
 	}
 }
 
-func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (types.RequestInfo, error) {
+func (f *filter) validateDNSRequest(dnsMsg *dns.Msg) (types.RequestInfo, error) {
 	if len(dnsMsg.Question) > 1 {
 		// drop DNS requests with more than one question; this is
 		// disallowed by RFC 9619: https://www.rfc-editor.org/info/rfc9619/#name-security-considerations
@@ -746,6 +731,26 @@ func (f *filter) validateDNSQuestion(dnsMsg *dns.Msg) (types.RequestInfo, error)
 	}
 
 	return ri, nil
+}
+
+func (f *filter) validateDNSResponse(ri types.RequestInfo, respMsg *dns.Msg) error {
+	// confirm that the request and response ID and question matches
+	if err := f.compareDNSReqResp(ri, respMsg); err != nil {
+		return err
+	}
+
+	// allow DNS response if there are no answers
+	if len(respMsg.Answer) == 0 {
+		return nil
+	}
+
+	// validate all DNS answer owner names before adding any
+	// IPs or domains any allowed lists
+	if err := f.validateDNSAnswers(respMsg); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (f *filter) compareDNSReqResp(req types.RequestInfo, resp *dns.Msg) error {
@@ -792,7 +797,11 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		if h.Class != dns.ClassINET {
 			return fmt.Errorf("answer RR class %s is not INET", qClassToString(h.Class))
 		}
+
 		rrType := dns.RRToType(a)
+		if !slices.Contains(allowedRRTypes, rrType) {
+			return fmt.Errorf("disallowed RR type %s for answer", rrTypeToString(rrType))
+		}
 
 		// if the owner name is a target from a previous allowed RR it's
 		// safe to allow it
@@ -850,7 +859,7 @@ func (f *filter) validateDNSAnswers(dnsMsg *dns.Msg) error {
 		case *dns.MX:
 			target = answer.Mx
 		default:
-			return fmt.Errorf("disallowed RR type %s for answer", rrTypeToString(rrType))
+			// allowed RR type that we don't check
 		}
 		if emptyTarget || target == "." {
 			continue
@@ -995,7 +1004,7 @@ func (f *filter) handleAnswers(dnsMsg *dns.Msg) {
 		case *dns.MX:
 			target = answer.Mx
 		default:
-			// other answer types are rejected in (*filter).validateDNSAnswers
+			// allowed RR type that we don't process
 		}
 		// temporarily allow resolution of the target domain, but skip root domains
 		if target != "" && target != "." {
@@ -1100,30 +1109,17 @@ func newDNSResponseCallback(f *FilterManager) hookCreator {
 
 			// if we are proxying requests over DoH, we should never
 			// receive plaintext DNS responses
-			if connFilter.injector != nil {
+			if connFilter.dohQueries != nil {
 				logger.Warn("dropping unsolicited DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
 				return dropVerdict
 			}
 
 			// confirm that the request and response ID and question matches
-			if err := connFilter.compareDNSReqResp(reqInfo, respMsg); err != nil {
+			if err := connFilter.validateDNSResponse(reqInfo, respMsg); err != nil {
 				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
 				return dropVerdict
 			}
 
-			// allow DNS response if the filter it came from is the self
-			// filter, all domains are allowed, or if there are no answers
-			if len(respMsg.Answer) == 0 {
-				logger.Info("allowing DNS response", dnsFields(respMsg, f.fullDNSLogging)...)
-				return acceptVerdict
-			}
-
-			// validate all DNS answer owner names before adding any
-			// IPs or domains any allowed lists
-			if err := connFilter.validateDNSAnswers(respMsg); err != nil {
-				logger.Info("dropping DNS response", connFilter.dropReasonFields(err, respMsg)...)
-				return dropVerdict
-			}
 			// the self filter should never allow additional IPs or domains
 			if !connFilter.isSelfFilter {
 				connFilter.handleAnswers(respMsg)
