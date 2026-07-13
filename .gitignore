@@ -5,6 +5,6 @@
 *.toml
 *.sh
 *.test
+*.nft
 
 egress-eddie
-./cmd/egress-eddie/egress-eddie

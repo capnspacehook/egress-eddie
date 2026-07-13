@@ -29,9 +29,10 @@ type Config struct {
 	SelfDNSQueue     uint16
 	ResolverIP       string
 	ResolveWithDoH   bool
-	DoHURL           string
-	DoHServerName    string
-	Filters          []FilterOptions
+	// TODO: require an IP or resolve host before filters start?
+	DoHURL        string
+	DoHServerName string
+	Filters       []FilterOptions
 
 	enforcerCreator enforcerCreator
 	sender          resolve.DNSSender

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -114,6 +115,7 @@ func main() {
 		}
 	}
 	if config.ResolveWithDoH {
+		// Allow connecting to 443 over TCP if DoH resolving is enabled.
 		u, err := url.Parse(config.DoHURL)
 		if err != nil {
 			logger.Fatal("parsing DoH URL", zap.Error(err))
@@ -128,6 +130,15 @@ func main() {
 		}
 
 		allowedRules = append(allowedRules, landlock.ConnectTCP(port))
+	} else if config.ResolverIP == "" {
+		// Allow reading resolve.conf if we need to resolve domains and
+		// no resolver is specified.
+		caches := slices.ContainsFunc(config.Filters, func(f egresseddie.FilterOptions) bool {
+			return len(f.CachedDomains) > 0
+		})
+		if caches {
+			allowedRules = append(allowedRules, landlock.PathAccess(llsyscall.AccessFSReadFile, "/etc/resolv.conf"))
+		}
 	}
 
 	err = landlock.V9.BestEffort().Restrict(

@@ -144,6 +144,7 @@ func NewSingleFlightSender(sender DNSSender) DNSSender {
 	}
 }
 
+// TODO: key off of the cookie as well if if needed
 func (s *singleFlightSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (dnsResp *dns.Msg, err error) {
 	ri, err := types.NewRequestInfo(dnsReq)
 	if err != nil {
@@ -242,7 +243,6 @@ type dohSender struct {
 	client      *http.Client
 }
 
-// TODO: use generic singleflight and timedcache to minimize requests
 func NewDoHSender(resolverURL, serverName string) DNSSender {
 	c := http.Client{
 		Transport: &http.Transport{
