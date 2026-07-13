@@ -3,26 +3,32 @@ linters:
   default: none
   enable:
     - asasalint
+    - asciicheck
     - bidichk
+    - bodyclose
+    - canonicalheader
     - copyloopvar
     - durationcheck
     - errcheck
     - errchkjson
     - errorlint
+    - exhaustive
     - exptostd
     - fatcontext
     - forcetypeassert
     - gocheckcompilerdirectives
-    - goconst
     - gocritic
     - govet
     - ineffassign
+    - iface
     - intrange
     - loggercheck
     - mirror
     - misspell
+    - modernize
     - nilerr
     - nolintlint
+    - nosprintfhostport
     - nilnesserr
     - nilnil
     - paralleltest
@@ -30,8 +36,10 @@ linters:
     - prealloc
     - predeclared
     - reassign
+    - recvcheck
     - revive
     - rowserrcheck
+    - sloglint
     - sqlclosecheck
     - thelper
     - tparallel
@@ -39,11 +47,17 @@ linters:
     - unparam
     - unused
     - usestdlibvars
+    - usetesting
     - wastedassign
   settings:
     errcheck:
       exclude-functions:
         - (go.uber.org/zap/zapcore.ObjectEncoder).AddObject
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    exhaustive:
+      default-signifies-exhaustive: true
     misspell:
       locale: US
     paralleltest:

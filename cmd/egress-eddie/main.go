@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -22,12 +26,12 @@ import (
 //nolint:vet
 func usage() {
 	fmt.Fprint(os.Stderr, `
-Egress Eddie filters arbitrary outbound network traffic by hostname.
+Egress Eddie filters arbitrary outbound network traffic by domain names.
 
-	eddie-eddie [flags]
+	egress-eddie [flags]
 
 Egress Eddie filters DNS traffic and only allows requests and replies to
-specified hostnames. It then caches the IP addresses from allowed DNS replies
+specified domains. It then caches the IP addresses from allowed DNS replies
 and only allows traffic to go to them.
 
 Egress Eddie requires nftables/iptables rules to be set to function correctly;
@@ -51,6 +55,7 @@ func main() {
 	debugLogs := flag.Bool("d", false, "enable debug logging")
 	logFullDNSPackets := flag.Bool("f", false, "enable full DNS packet logging")
 	logPath := flag.String("l", "stdout", "path to log to")
+	permissiveMode := flag.Bool("insecure-permissive", false, "enable permissive mode: all traffic will be allowed and packet decisions will be logged only")
 	validateConfig := flag.Bool("t", false, "validate the config and exit")
 	printVersion := flag.Bool("version", false, "print version and build information and exit")
 	flag.Parse()
@@ -65,19 +70,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	logCfg := zap.NewProductionConfig()
-	logCfg.OutputPaths = []string{*logPath}
-	if *debugLogs {
-		logCfg.Level.SetLevel(zap.DebugLevel)
-	}
-	logCfg.EncoderConfig.TimeKey = "time"
-	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	logCfg.DisableCaller = true
-
-	logger, err := logCfg.Build()
-	if err != nil {
-		log.Fatalf("error creating logger: %v", err)
-	}
+	logger := buildLogger(*logPath, *debugLogs, *validateConfig)
 
 	var versionFields []zap.Field
 	versionFields = append(versionFields, zap.String("version", version))
@@ -100,40 +93,71 @@ func main() {
 		os.Exit(0)
 	}
 	if err != nil {
-		logger.Fatal("error parsing config", zap.NamedError("error", err))
+		logger.Fatal("parsing config", zap.Error(err))
 	}
 
-	// Try and apply landlock rules, preventing access to non-essential
-	// files. Only recent versions of the kernel support landlock (5.13+),
+	// Preload the system root certs if DoH is enabled so we don't have
+	// to allow reading these files in the landlock rules.
+	if config.ResolveWithDoH {
+		_, err := x509.SystemCertPool()
+		if err != nil {
+			logger.Fatal("loading system certificates", zap.Error(err))
+		}
+	}
+
+	// Try to apply landlock rules, preventing access to non-essential
+	// files. Most recent versions of the kernel support landlock (5.13+),
 	// but we will ignore errors if the kernel itself does not support it.
-	// These rules can only be applied when egress-eddie does not need to make
-	// network connections, as currently it seems landlock does not support
-	// networking.
-	needsNetworking := config.SelfDNSQueue.IPv4 != 0 || config.SelfDNSQueue.IPv6 != 0
-	if !needsNetworking {
-		var allowedPaths []landlock.Rule
-		if *logPath != "stdout" && *logPath != "stderr" {
-			allowedPaths = []landlock.Rule{
-				landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
+	var allowedRules []landlock.Rule
+	if *logPath != "stdout" && *logPath != "stderr" {
+		allowedRules = []landlock.Rule{
+			landlock.PathAccess(llsyscall.AccessFSWriteFile, *logPath),
+		}
+	}
+	if config.ResolveWithDoH {
+		// Allow connecting to 443 over TCP if DoH resolving is enabled.
+		u, err := url.Parse(config.DoHURL)
+		if err != nil {
+			logger.Fatal("parsing DoH URL", zap.Error(err))
+		}
+		port := uint16(443)
+		if portStr := u.Port(); portStr != "" {
+			p, err := strconv.ParseUint(portStr, 10, 16)
+			if err != nil {
+				logger.Fatal("parsing DoH URL port", zap.Error(err))
 			}
+			port = uint16(p)
 		}
 
-		err = landlock.V1.RestrictPaths(
-			allowedPaths...,
-		)
-		if err != nil {
-			if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
-				logger.Fatal("error creating landlock rules", zap.NamedError("error", err))
-			}
+		allowedRules = append(allowedRules, landlock.ConnectTCP(port))
+	} else if config.ResolverIP == "" {
+		// Allow reading resolve.conf if we need to resolve domains and
+		// no resolver is specified.
+		caches := slices.ContainsFunc(config.Filters, func(f egresseddie.FilterOptions) bool {
+			return len(f.CachedDomains) > 0
+		})
+		if caches {
+			allowedRules = append(allowedRules, landlock.PathAccess(llsyscall.AccessFSReadFile, "/etc/resolv.conf"))
 		}
+	}
+
+	err = landlock.V9.BestEffort().Restrict(
+		allowedRules...,
+	)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "missing kernel Landlock support") {
+			logger.Fatal("creating landlock rules", zap.Error(err))
+		}
+		logger.Warn("unable to apply landlock rules, kernel not supported")
+	} else {
 		logger.Info("applied landlock rules")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
-	filters, err := egresseddie.CreateFilters(ctx, logger, config, *logFullDNSPackets)
+	filters, err := egresseddie.CreateFilters(ctx, logger, config, *permissiveMode, *logFullDNSPackets)
 	if err != nil {
-		logger.Fatal("error starting filters", zap.NamedError("error", err))
+		logger.Fatal("starting filters", zap.Error(err))
 	}
 
 	defer func() {
@@ -149,9 +173,10 @@ func main() {
 	// The seccomp filters are installed after nfqueues are opened so
 	// the related syscalls do not have to be allowed for the rest of
 	// the process's lifetime.
-	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking)
+	needsNetworking := config.ResolveWithDoH || config.SelfDNSQueue != 0
+	numAllowedSyscalls, err := installSeccompFilters(logger, needsNetworking, config.ResolveWithDoH)
 	if err != nil {
-		logger.Error("error setting seccomp rules", zap.NamedError("error", err))
+		logger.Error("error setting seccomp rules", zap.Error(err))
 		return
 	}
 	logger.Info("applied seccomp filters", zap.Int("syscalls.allowed", numAllowedSyscalls))
@@ -161,4 +186,26 @@ func main() {
 	logger.Info("started filtering")
 
 	<-ctx.Done()
+}
+
+func buildLogger(logPath string, debugLogs, validateConfig bool) *zap.Logger {
+	if validateConfig {
+		return zap.NewNop()
+	}
+
+	logCfg := zap.NewProductionConfig()
+	logCfg.OutputPaths = []string{logPath}
+	if debugLogs {
+		logCfg.Level.SetLevel(zap.DebugLevel)
+	}
+	logCfg.EncoderConfig.TimeKey = "time"
+	logCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	logCfg.DisableCaller = true
+
+	logger, err := logCfg.Build()
+	if err != nil {
+		log.Fatalf("error creating logger: %v", err)
+	}
+
+	return logger
 }

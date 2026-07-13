@@ -6,13 +6,13 @@
 
 ## Purpose
 
-Egress Eddie is a simple tool designed to do one thing: filter outbound traffic by hostname on Linux.
-Iptables and nftables both only let you filter by IP address, generally if you want to filter
-by hostname you need a proxy for the specific protocol you're trying to filter. But Egress Eddie
-allows you to filter all TCP and UDP traffic by hostname, regardless of the protocol being used
+Egress Eddie is a simple tool designed to do one thing: filter outbound traffic by a domain names on Linux.
+Iptables and nftables both only let you filter by IP addresses; generally if you want to filter
+by domain names you need a proxy for the specific protocol you're trying to filter. But Egress Eddie
+allows you to filter all TCP and UDP traffic by domain names, regardless of the protocol being used
 on top.
 
-Filtering by hostname can make it exceedingly difficult for both malware to phone home and misbehaving
+Filtering by domain names can make it exceedingly difficult for both malware to phone home and misbehaving
 software to send unwanted telemetry. Combined with strong egress firewall rules, Egress Eddie can
 act as a failsafe, preventing attackers that are able to execute code on your machine from exfiltrating
 data or interactively taking control.
@@ -20,23 +20,23 @@ data or interactively taking control.
 ## How it works
 
 Egress Eddie utilizes nfqueue to intercept configured packets from iptables or nftables. It then filters
-DNS requests, only allowing requests for allowed hostnames. DNS responses to those requests are tracked,
-and only the IP addresses or hostnames present in DNS responses are allowed outbound for a configurable 
+DNS requests, only allowing requests for allowed domain names. DNS responses to those requests are tracked,
+and only the IP addresses or domain names present in DNS responses are allowed outbound for a configurable 
 amount of time.
 
 ## Details
 
 All DNS requests that are sent to Egress Eddie are filtered to make sure the questions contain allowed
-hostnames, and all DNS responses are also filtered in the same way. Additionally, only DNS responses from
+domain names, and all DNS responses are also filtered in the same way. Additionally, only DNS responses from
 an established connection are accepted, but DNS requests from either a new or established connections
 are accepted.
 
-A DNS message is allowed if all of the questions in that message have an explicitly allowed hostname as
-a suffix. For example, if `google.com` is an allowed hostname, DNS requests for
+A DNS message is allowed if all of the questions in that message have an explicitly allowed domain name or
+subdomain. For example, if `google.com` is an allowed domain name, DNS requests for
 `blog.google.com`, `groups.google.com`, and `google.com` would all be allowed.
 
 Accepted DNS answers of type `A` and `AAAA` cause the contained IPs to be allowed. DNS answers of type
-`CNAME`, `SRV`, `MX` and `NS` cause the contained hostnames to be allowed to be queried. All other accepted
+`CNAME`, `SRV`, `MX` and `NS` cause the contained domain names to be allowed to be queried. All other accepted
 DNS answer types are passed through to the sender with no action taken by Egress Eddie.
 
 Normal traffic is only parsed up to the network layer (`IPv4` or `IPv6`). The source and destination
@@ -92,8 +92,8 @@ you want to filter.
 ### Sending DNS requests
 
 Next, you'll need to add a rule that sends DNS requests to Egress Eddie. You can either
-send all DNS requests and filter all hostnames at once, or send specific DNS requests
-so that you can more granularly filter by hostname. For example, you can filter outbound
+send all DNS requests and filter all domain names at once, or send specific DNS requests
+so that you can more granularly filter by domain name. For example, you can filter outbound
 traffic by the user who created the connection in iptables, allowing you to filter DNS
 requests differently depending on who sent it.
 
@@ -136,40 +136,40 @@ numbers to open and use. Here's a simple config that only allows traffic to `git
 using the same nfqueue numbers that were set in iptables rules above:
 
 ```toml
-inboundDNSQueue.ipv4 = 1
+dnsResponseQueue.ipv4 = 1
 
 [[filters]]
 name = "example"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "5m"
-allowedHostnames = [
+allowedDomains = [
     "github.com",
 ]
 ```
 
-If you are filtering `IPv6` traffic and using ip6tables, set `inboundDNSQueue.ipv6`,
+If you are filtering `IPv6` traffic and using ip6tables, set `dnsResponseQueue.ipv6`,
 `dnsQueue.ipv6`, and `trafficQueue.ipv6`.
 
 Next we create a filter, setting the nfqueue numbers used for DNS requests and traffic
 that we want filtered. The `name` of each filter is simply an identifier that will allow
 you to more easily read or search through Egress Eddie's logs.
 
-`allowAnswersFor` controls how long IPs and hostnames returned
+`allowAnswersFor` controls how long IPs and domain names returned
 from DNS responses are allowed for. The syntax for specifying a duration is the 
 [Go duration syntax](https://pkg.go.dev/time#ParseDuration).
 
-Finally `allowedHostnames` controls the hostnames that are allowed, which here is just `github.com`.
+Finally `allowedDomains` controls the domain names that are allowed, which here is just `github.com`.
 
-### Allowing all hostnames
+### Allowing all domain names
 
-There may be situations where you want to filter the hostnames of a specific user or type
+There may be situations where you want to filter the domain names of a specific user or type
 of traffic, but allow other users or types of traffic flow unrestricted. I like to allow
 the root user to have unrestricted HTTP/S access for example, as if someone compromises the
 root account, then all other bets are off.
 
-To accomplish this, set `allowAllHostnames = true` and don't set both `trafficQueue` and
-`allowedHostnames`. Because all DNS responses must be inspected by Egress Eddie in order for it to
+To accomplish this, set `allowAllDomains = true` and don't set both `trafficQueue` and
+`allowedDomains`. Because all DNS responses must be inspected by Egress Eddie in order for it to
 function properly, all DNS requests must go through Egress Eddie as well.
 
 ## Example
@@ -203,7 +203,7 @@ iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner root -j NFQUEUE --queu
 config file:
 
 ```toml
-inboundDNSQueue.ipv4 = 1
+dnsResponseQueue.ipv4 = 1
 
 # filter apt updating
 [[filters]]
@@ -211,7 +211,7 @@ name = "apt updating"
 dnsQueue.ipv4 = 1000
 trafficQueue.ipv4 = 1001
 allowAnswersFor = "30m"
-allowedHostnames = [
+allowedDomains = [
     "deb.debian.org",
     "security.debian.org",
 ]
@@ -222,7 +222,7 @@ name = "go modules"
 dnsQueue.ipv4 = 2000
 trafficQueue.ipv4 = 2001
 allowAnswersFor = "5m"
-allowedHostnames = [
+allowedDomains = [
     "proxy.golang.org",
     "sum.golang.org",
 ]
@@ -231,7 +231,7 @@ allowedHostnames = [
 [[filters]]
 name = "root allow all"
 dnsQueue.ipv4 = 3000
-allowAllHostnames = true
+allowAllDomains = true
 ```
 
 ## Verifying releases

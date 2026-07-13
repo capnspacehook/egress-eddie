@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"sync"
 
-	"github.com/florianl/go-nfqueue"
+	"codeberg.org/miekg/dns"
+	"github.com/florianl/go-nfqueue/v2"
 	"go.uber.org/zap"
+
+	"github.com/capnspacehook/egress-eddie/types"
 )
 
 var mockEnforcers map[uint16]*mockEnforcer
@@ -24,15 +25,18 @@ func initMockEnforcers() {
 	mockEnforcers = make(map[uint16]*mockEnforcer)
 }
 
-func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, _ bool, hook nfqueue.HookFunc) (enforcer, error) {
+func newMockEnforcer(_ context.Context, _ *zap.Logger, queueNum uint16, createHook hookCreator) (enforcer, error) {
 	if _, ok := mockEnforcers[queueNum]; ok {
 		return nil, fmt.Errorf("a nfqueue with the queue number %d has already been started", queueNum)
 	}
+	if createHook == nil {
+		return nil, errors.New("a nil hook creator was passed")
+	}
 
 	mEnforcer := &mockEnforcer{
-		hook:     hook,
 		verdicts: make(map[uint32]int),
 	}
+	mEnforcer.hook = createHook(queueNum, mEnforcer)
 	mockEnforcers[queueNum] = mEnforcer
 
 	return mEnforcer, nil
@@ -60,31 +64,44 @@ func (m *mockEnforcer) Close() error {
 	return nil
 }
 
-type mockResolver struct {
-	addrs     map[string][]netip.Addr
-	hostnames map[string][]string
+type mockSender struct {
+	// resp is the response returned by the next SendRequest call. Tests set
+	// this before delivering a request that is expected to be proxied.
+	resp *dns.Msg
+	// called records whether SendRequest was invoked; tests reset it before
+	// delivering a request to assert whether the resolver was hit.
+	called bool
+
+	responsesValidated bool
 }
 
-func (m *mockResolver) LookupNetIP(_ context.Context, _ string, host string) ([]netip.Addr, error) {
-	if m.addrs == nil {
-		return nil, &net.DNSError{IsNotFound: true}
+func (m *mockSender) SendRequest(_ context.Context, _ *dns.Msg) (*dns.Msg, error) {
+	m.called = true
+	if m.resp == nil {
+		return nil, errors.New("mockSender: no response configured")
 	}
-
-	if addrs, ok := m.addrs[host]; ok {
-		return addrs, nil
-	}
-
-	return nil, &net.DNSError{IsNotFound: true}
+	return m.resp, nil
 }
 
-func (m *mockResolver) LookupAddr(_ context.Context, addr string) ([]string, error) {
-	if m.hostnames == nil {
-		return nil, &net.DNSError{IsNotFound: true}
-	}
+func (m *mockSender) ResponsesValidated() bool {
+	return m.responsesValidated
+}
 
-	if addrs, ok := m.hostnames[addr]; ok {
-		return addrs, nil
-	}
+func (m *mockSender) TransportType() string {
+	return "mock"
+}
 
-	return nil, &net.DNSError{IsNotFound: true}
+// mockInjector is a resolve.DNSInjector that records how many responses were
+// injected instead of writing packets to a raw socket.
+type mockInjector struct {
+	count int
+}
+
+func (m *mockInjector) InjectResponse(_ *dns.Msg, _ types.ConnectionID, _ nfqueue.Attribute) error {
+	m.count++
+	return nil
+}
+
+func (m *mockInjector) Close() error {
+	return nil
 }
