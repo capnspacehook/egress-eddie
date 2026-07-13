@@ -188,7 +188,13 @@ func CreateFilters(ctx context.Context, logger *zap.Logger, config *Config, perm
 		if dnsSender == nil {
 			dnsSender = resolve.NewDoHSender(config.DoHURL, config.DoHServerName)
 		}
-		if f.injector == nil {
+
+		// if any filter will need to process incoming DNS traffic and
+		// DoH resolution is enabled, the injector must be used
+		anyAllowedDomains := slices.ContainsFunc(config.Filters, func(opt FilterOptions) bool {
+			return opt.AllowAllDomains || len(opt.AllowedDomains) > 0
+		})
+		if anyAllowedDomains && f.injector == nil {
 			var err error
 			f.injector, err = resolve.NewDNSInjector()
 			if err != nil {
@@ -339,8 +345,8 @@ func createFilter(ctx context.Context, logger *zap.Logger, opts *FilterOptions, 
 			ssrf.WithDeniedV6Prefixes(disallowedIPv6Prefixes...),
 		)
 
-		f.dohQueries = make(chan dohRequest, numBufferedDoHRequests)
 		if f.injector != nil {
+			f.dohQueries = make(chan dohRequest, numBufferedDoHRequests)
 			f.handleDoHRequests(ctx, filterLogger, numDoHWorkers)
 		}
 	}
@@ -573,9 +579,6 @@ func (f *filter) handleDoHRequests(ctx context.Context, logger *zap.Logger, numW
 					logger.Error("forwarding DoH request", zap.Error(err))
 					continue
 				}
-				// dnshttp.NewRequest sets the message ID to zero, so we need to
-				// set it back
-				respMsg.ID = r.ri.ID
 
 				// confirm that the request and response question matches
 				if err := f.compareDNSReqResp(r.ri, respMsg); err != nil {
@@ -673,9 +676,8 @@ func newDNSRequestCallback(f *filter) hookCreator {
 				return dropVerdict
 			}
 
-			// if the injector is set we should always proxy requests
-			// over DoH
-			if f.injector != nil {
+			// proxy requests over DoH if we're configured to
+			if f.dohQueries != nil {
 				f.dohQueries <- dohRequest{
 					reqMsg: reqMsg,
 					ri:     ri,

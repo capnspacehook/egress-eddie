@@ -52,7 +52,6 @@ func TestSingleFlightSenderRace(t *testing.T) {
 					return
 				}
 
-				resp.ID = 0
 				err = resp.Pack()
 				if err != nil {
 					t.Errorf("packing response: %v", err)

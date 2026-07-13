@@ -228,7 +228,7 @@ func testFilterState(t *rapid.T) {
 						Type:  dns.RRToType(q),
 						Class: q.Header().Class,
 					}
-					resp, respMalformed = genResponseMsg(t, &storedReq{RequestInfo: req}, true)
+					resp, respMalformed = genResponseMsg(t, &storedReq{RequestInfo: req})
 					sender.resp = resp
 				}
 
@@ -279,7 +279,7 @@ func testFilterState(t *rapid.T) {
 				var msg *dns.Msg
 				var malformed bool
 				if havePending {
-					msg, malformed = genResponseMsg(t, req, false)
+					msg, malformed = genResponseMsg(t, req)
 				} else {
 					msg, _ = genResponseMsg(t, &storedReq{
 						RequestInfo: types.RequestInfo{
@@ -288,7 +288,7 @@ func testFilterState(t *rapid.T) {
 							Type:  dns.TypeA,
 							Class: dns.ClassINET,
 						},
-					}, false)
+					})
 					// we don't need to set malformed as if this isn't
 					// for a pending request this should always be dropped
 				}
@@ -394,17 +394,13 @@ func genRequestMsg(t *rapid.T) (*dns.Msg, bool) {
 // independently to exercise compareDNSReqResp. The answer section is built as a
 // chain: each RR's target becomes the next RR's owner, mirroring real CNAME/SRV
 // chains so the in-order allowedTargets accumulation is tested.
-//
-// When matchID is true the response ID always matches the request and is never
-// mismatched: this models DoH mode, where proxyDoH forces resp.ID = req.id
-// before validating, so an ID mismatch can never cause a rejection.
-func genResponseMsg(t *rapid.T, req *storedReq, matchID bool) (_ *dns.Msg, malformed bool) {
+func genResponseMsg(t *rapid.T, req *storedReq) (_ *dns.Msg, malformed bool) {
 	msg := new(dns.Msg)
 	msg.Response = true
 
 	msg.ID = req.ID
-	if !matchID && rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
-		msg.ID = uint16(rapid.IntRange(0, 0xffff).Draw(t, "wrongID"))
+	if rapid.IntRange(0, 4).Draw(t, "mismatchID") == 0 {
+		msg.ID = rapid.Uint16().Draw(t, "wrongID")
 		malformed = msg.ID != req.ID
 		t.Log("possibly mismatched IDs")
 	}

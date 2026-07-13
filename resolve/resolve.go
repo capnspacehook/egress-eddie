@@ -15,6 +15,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"codeberg.org/miekg/dns/dnsconf"
 	"codeberg.org/miekg/dns/dnshttp"
+	"codeberg.org/miekg/dns/dnsutil"
 	"github.com/capnspacehook/singleflight-generic"
 	"github.com/florianl/go-nfqueue/v2"
 	"github.com/gopacket/gopacket"
@@ -104,8 +105,7 @@ func Domain(ctx context.Context, domain string, sender DNSSender, validateResp V
 					case dns.RcodeNotImplemented:
 						lookupErrs = append(lookupErrs, errors.New("not implemented"))
 					default:
-						rcodeStr := dns.RcodeToString[result.resp.Rcode]
-						lookupErrs = append(lookupErrs, fmt.Errorf("received response code %s", rcodeStr))
+						lookupErrs = append(lookupErrs, fmt.Errorf("received response code %s", dnsutil.RcodeToString(result.resp.Rcode)))
 					}
 
 					continue
@@ -263,6 +263,8 @@ func NewDoHSender(resolverURL, serverName string) DNSSender {
 }
 
 func (d *dohSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (*dns.Msg, error) {
+	id := dnsReq.ID
+
 	httpReq, err := dnshttp.NewRequest("GET", d.resolverURL, dnsReq)
 	if err != nil {
 		return nil, fmt.Errorf("creating DoH request: %w", err)
@@ -282,6 +284,11 @@ func (d *dohSender) SendRequest(ctx context.Context, dnsReq *dns.Msg) (*dns.Msg,
 	if err != nil {
 		return nil, fmt.Errorf("reading DoH response: %w", err)
 	}
+
+	// dnshttp.NewRequest sets the message ID to zero, so we need to
+	// set it back and make the response match the original request ID
+	dnsReq.ID = id
+	dnsResp.ID = id
 
 	return dnsResp, nil
 }
@@ -309,7 +316,9 @@ type rawInjector struct {
 	mtx    sync.RWMutex
 	closed bool
 
-	socket int
+	loIface net.Interface
+	ifaces  map[int]net.Interface
+	socket  int
 }
 
 func NewDNSInjector() (DNSInjector, error) {
@@ -318,8 +327,22 @@ func NewDNSInjector() (DNSInjector, error) {
 		return nil, fmt.Errorf("creating raw socket: %w", err)
 	}
 
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("getting network interfaces: %w", err)
+	}
+	if len(ifaces) == 0 {
+		return nil, errors.New("no network interfaces found")
+	}
+	ifaceIdxes := make(map[int]net.Interface, len(ifaces))
+	for _, iface := range ifaces {
+		ifaceIdxes[iface.Index] = iface
+	}
+
 	return &rawInjector{
-		socket: sock,
+		loIface: ifaces[0],
+		ifaces:  ifaceIdxes,
+		socket:  sock,
 	}, nil
 }
 
@@ -338,7 +361,13 @@ type netPacket interface {
 }
 
 func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.AddrPort, attr nfqueue.Attribute) error {
-	// TODO: cache interfaces?
+	d.mtx.RLock()
+	defer d.mtx.RUnlock()
+
+	if d.closed {
+		return errors.New("socket is closed")
+	}
+
 	var srcMAC, dstMAC net.HardwareAddr
 	var sa *unix.SockaddrLinklayer
 	if attr.HwAddr != nil {
@@ -352,9 +381,9 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 			ifaceIDx = int(*attr.InDev)
 		}
 
-		iface, err := net.InterfaceByIndex(ifaceIDx)
-		if err != nil {
-			return fmt.Errorf("getting network interface by index: %w", err)
+		iface, ok := d.ifaces[ifaceIDx]
+		if !ok {
+			return fmt.Errorf("no network interface found for index %d", ifaceIDx)
 		}
 
 		srcMAC = iface.HardwareAddr
@@ -366,11 +395,7 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 		srcMAC = make(net.HardwareAddr, 6)
 		dstMAC = make(net.HardwareAddr, 6)
 
-		iface, err := net.InterfaceByName("lo")
-		if err != nil {
-			return fmt.Errorf("getting network interface by name: %w", err)
-		}
-		sa = &unix.SockaddrLinklayer{Ifindex: iface.Index}
+		sa = &unix.SockaddrLinklayer{Ifindex: d.loIface.Index}
 	}
 
 	ethLayer := &layers.Ethernet{
@@ -417,12 +442,6 @@ func (d *rawInjector) InjectResponse(dnsResp *dns.Msg, srcAddr, dstAddr netip.Ad
 	err := gopacket.SerializeLayers(buf, opts, ethLayer, ipLayer, udpLayer, gopacket.Payload(dnsResp.Data))
 	if err != nil {
 		return fmt.Errorf("encoding packet: %w", err)
-	}
-
-	d.mtx.RLock()
-	defer d.mtx.RUnlock()
-	if d.closed {
-		return errors.New("socket is closed")
 	}
 
 	if err := unix.Sendto(d.socket, buf.Bytes(), 0, sa); err != nil {
